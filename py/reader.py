@@ -335,6 +335,70 @@ def si_scale(max_abs, units):
     return 1.0 / _PREFIXES[0][0], _PREFIXES[0][1] + units
 
 
+# ----------------------------------------------------------------------------- training arrays
+
+def export(key, channel=None, direction="forward", flatten="none", index=None):
+    """The training array for one channel of a loaded file, plus what is needed to interpret it.
+
+    Full resolution, in the units of the file (no display scaling), NaN kept:
+
+    * image / cube: float32 (H, W), flattened as viewed (``flatten``); a cube gives the slice ``index``.
+      Row 0 is the first row of the file (see ``origin`` in the returned meta).
+    * rgb:          uint8 (H, W, 3)
+    * spectrum:     float32 (rows, N): row 0 = the swept axis (bias), then one row per direction
+
+    Returns {"kind", "npy": bytes of a .npy file, "meta": {...}}. Raises KeyError for an unknown channel.
+    """
+    import dataset
+    channels = _cache[key]["channels"]
+    if channel not in channels:
+        raise KeyError("channel %r is not in this file" % (channel,))
+    dirs = channels[channel]
+    if direction not in dirs:
+        direction = next(iter(dirs))
+    entry = dirs[direction]
+    meta = {"channel": channel, "units": entry["units"], "quantity": entry["quantity"]}
+
+    if entry["kind"] == "spectrum":
+        x = entry["x"]
+        arr = np.asarray([x["values"]] + [e["y"] for e in dirs.values()], dtype=np.float32)
+        bias = x["values"][np.isfinite(x["values"])]   # exact values (the saved row is float32)
+        meta.update(kind="spectrum",
+                    rows=[_label(x["name"], x["units"])] +
+                         ["%s %s" % (_label(entry["quantity"], entry["units"]), d) for d in dirs],
+                    bias_name=x["name"], bias_units=x["units"], n_points=int(arr.shape[1]),
+                    bias_min=float(bias.min()) if bias.size else None,
+                    bias_max=float(bias.max()) if bias.size else None)
+    else:
+        if entry["kind"] == "rgb":
+            arr = entry["data"]
+            if arr.dtype != np.uint8:   # e.g. 16-bit RGB tif
+                arr = arr.astype(float)
+                arr = np.clip(arr / max(np.nanmax(arr), 1e-12) * 255, 0, 255).astype(np.uint8)
+            meta.update(kind="rgb")
+        else:
+            data = entry["data"]
+            if entry["kind"] == "cube":
+                n = data.shape[-1]
+                index = n // 2 if index is None else int(min(max(index, 0), n - 1))
+                z = entry["z"]
+                data = data[..., index]
+                meta.update(slice_index=index, slice_value=float(z["values"][index]),
+                            slice_name=z["name"], slice_units=z["units"])
+            arr = apply_flatten(np.asarray(data, dtype=float), flatten).astype(np.float32)
+            meta.update(kind="image", direction=direction, flatten=flatten)
+
+        def size(ax):   # full extent of an axis, in its own units
+            v = ax["values"]
+            return float(abs(v[-1] - v[0]) * len(v) / (len(v) - 1)) if len(v) > 1 else float(len(v))
+        width, height = size(entry["x"]), size(entry["y"])
+        meta.update(origin=entry["origin"], extent_units=entry["x"]["units"], width=width, height=height,
+                    pixel_x=width / arr.shape[1], pixel_y=height / arr.shape[0])
+
+    meta.update(shape=list(arr.shape), dtype=str(arr.dtype))
+    return {"kind": meta["kind"], "npy": dataset.to_npy(arr), "meta": meta}
+
+
 # ----------------------------------------------------------------------------- metadata
 
 def metadata(key, channel=None, direction="forward"):

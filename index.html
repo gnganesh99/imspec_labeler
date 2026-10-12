@@ -123,7 +123,8 @@
   .clip { display: flex; align-items: center; gap: 8px; }
   .clip button { padding: 3px 9px; font-size: 12px; }
   #profPlot { width: 100%; }
-  #cfgText { width: 100%; font: 12px/1.4 ui-monospace, monospace; color: var(--text); background: var(--bg);
+  #dsStatus { white-space: pre-wrap; word-break: break-word; }
+  #cfgText, #dsText { width: 100%; font: 12px/1.4 ui-monospace, monospace; color: var(--text); background: var(--bg);
              border: 1px solid var(--border); border-radius: 6px; padding: 8px; resize: vertical; margin: 6px 0; }
   #scoreValue { font: 600 26px ui-monospace, monospace; min-height: 46px; padding: 6px 12px; border: 2px solid var(--accent);
                 border-radius: 8px; background: var(--bg); word-break: break-all; }
@@ -232,6 +233,19 @@
         </div>
       </details>
       <label class="chk"><input type="checkbox" id="tReadout" checked> Pixel readout (follows the cursor)</label>
+      <details id="dsBox">
+        <summary>Training dataset</summary>
+        <div class="tool">
+          <label class="chk"><input type="checkbox" id="dsSave" checked> Save a training array for every labeled file</label>
+          <p class="sub">Arrays go to <code>labeled/training_data/arrays/</code>: full resolution, as viewed (flatten applied), NaN kept.
+            <em>Build dataset</em> stacks them into <code>&lt;mode&gt;_&lt;image | spectrum&gt;_input.npy</code>,
+            <code>_output.npy</code> and <code>_aux.npy</code> in <code>labeled/training_data/</code>, using the settings below.</p>
+          <textarea id="dsText" rows="12" spellcheck="false" disabled></textarea>
+          <div class="sub" id="dsMsg"></div>
+          <button id="dsBuild" disabled>Build dataset</button>
+          <div class="sub" id="dsStatus"></div>
+        </div>
+      </details>
       <details id="cfgBox">
         <summary>Labeling settings <span class="sub" id="cfgMode"></span></summary>
         <p class="sub" id="cfgHint"></p>
@@ -296,7 +310,7 @@
   // Run locally, every load gets a fresh value (no stale cache while developing).
   const BUILD = "__BUILD__";
   const BUILD_V = BUILD.startsWith("__") ? Date.now() : BUILD;
-  for (const f of ["tools.js", "modes.js", "app.js"]) document.write(`<script src="${f}?v=${BUILD_V}"><\/script>`);
+  for (const f of ["tools.js", "modes.js", "dataset.js", "app.js"]) document.write(`<script src="${f}?v=${BUILD_V}"><\/script>`);
 </script>
 </body>
 </html>

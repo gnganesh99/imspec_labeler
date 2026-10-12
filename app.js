@@ -6,7 +6,8 @@ const LOG_DIR = "labeled";
 const LOG_FILE = "classification_log.csv";
 // one row per file and mode: binary / multiclass rows fill label (+ class_id), score rows fill score
 // flatten: the flatten type applied to the image when the entry was made (empty for spectra)
-const LOG_COLUMNS = ["file", "type", "channel", "flatten", "mode", "label", "class_id", "score", "tags", "note", "timestamp"];
+// array: the training array saved for this entry (a file in labeled/training_data/arrays/), empty when none was saved
+const LOG_COLUMNS = ["file", "type", "channel", "flatten", "mode", "label", "class_id", "score", "tags", "note", "array", "timestamp"];
 const DEFER_LABEL = "Deferred";   // always available on key D; copies go to labeled/deferred/
 const COPY_MODES = ["none", "original", "image"];
 const SUPPORTED = /\.(sxm|dat|3ds|jpe?g|png|bmp|gif|webp|tiff?)$/i;
@@ -19,7 +20,7 @@ const DEFAULT_SETTINGS = {
   dat: {}, img: { flatten: "none", cmap: "gray" },
 };
 
-const APP_VERSION = "2026-10-08";   // shown in the header: tells which build runs
+const APP_VERSION = "2026-10-12 · training arrays and Build dataset";   // shown in the header: tells which build runs
 const $ = (id) => document.getElementById(id);
 const state = {
   dir: null, config: mergeConfig({}), userConfig: {}, mode: "binary", scoreBuf: "",
@@ -106,6 +107,7 @@ async function openFolder(handle) {
   state.files = files.sort((a, b) => state.mtimes.get(a) - state.mtimes.get(b) || naturalCompare(a, b));
   setLabels(await readLog());
   applyConfig(userConfig);   // mode, classes, copy mode ... from labeler.json
+  await loadDatasetConfig();   // build settings for the training dataset
   viewCache.clear();
   $("message").classList.add("hidden");
   $("side").classList.remove("hidden");
@@ -506,8 +508,11 @@ function record(fields) {
   const flatten = view && (view.kind === "image" || view.kind === "cube") ? state.settings[cur.type].flatten : "";
   const row = {
     file: cur.name, type: cur.type, channel, flatten, mode, label: "", class_id: "", score: "", tags: "",
-    note: state.note, timestamp: localTimestamp(), ...fields,
+    note: state.note, array: "", timestamp: localTimestamp(), ...fields,
   };
+  // training array (dataset.js): what is on screen now, written after the log entry; deferred files have no output
+  const snap = view && arraysOn() && row.label !== DEFER_LABEL ? arraySnapshot(cur, view, state.settings[cur.type]) : null;
+  if (snap) row.array = snap.array;
   state.note = "";
   $("noteChip").classList.add("hidden");
   const previous = rowOf(cur.name);   // set when reviewing an already labeled file
@@ -521,10 +526,13 @@ function record(fields) {
       const rows = (await readLog()).filter((r) => !(r.file === cur.name && r.mode === mode));
       await writeLog([...rows, row]);
       await removeCopies(previous);
+      await removeArrayIfUnused(previous.array);
     } else await appendLog(row);
-    if (!row.label) return;
-    if (snapshot) await writeJpeg(snapshot, jpegName(cur.name), row.label);
-    else if (copy === "original") await copyInto(cur.name, row.label);
+    if (row.label && snapshot) await writeJpeg(snapshot, jpegName(cur.name), row.label);
+    else if (row.label && copy === "original") await copyInto(cur.name, row.label);
+    if (snap) {
+      await saveArray(snap).catch((e) => toast(`Could not save the training array for ${cur.name}: ${e.message}`, 8000));
+    }
   }, `Could not save the entry for ${cur.name}`);
   const shown = row.label || row.score, was = previous ? chipText(previous) : "";
   toast(`${cur.name} → ${shown}${previous ? " (was " + was + ")" : ""}`);
@@ -554,6 +562,7 @@ function undo() {
     await writeLog(rows);
     await removeCopies(last);
     setLabels(rows);
+    await removeArrayIfUnused(last.array);
     toast(`Undid ${last.file} → ${chipText(last)}`);
     const i = state.files.indexOf(last.file);
     goTo(i >= 0 ? i : nextUndone(0));
@@ -820,6 +829,7 @@ async function lastHandle() {
   document.addEventListener("keydown", onKey);
   initTools();
   initModes();
+  initDataset();
   $("channel").onchange = (e) => { changeSetting({ channel: e.target.value }); e.target.blur(); };
   $("flatten").onchange = (e) => { changeSetting({ flatten: e.target.value }); e.target.blur(); };
   $("cmap").onchange = (e) => { changeSetting({ cmap: e.target.value }); e.target.blur(); };

@@ -30,7 +30,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir _site
-          cp -r index.html app.js tools.js modes.js worker.js py vendor wheels _site/
+          cp -r index.html app.js tools.js modes.js dataset.js worker.js py vendor wheels _site/
           sed -i "s/__BUILD__/${GITHUB_SHA::8}/" _site/index.html
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

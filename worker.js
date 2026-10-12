@@ -1,11 +1,11 @@
 // Runs Pyodide + py/reader.py off the main thread.
-// Messages in:  {id, op: "show" | "render" | "cancel", prio, gen, ...args}
+// Messages in:  {id, op: "show" | "render" | "meta" | "export" | "transform" | "cancel", prio, gen, ...args}
 // Messages out: {id, ok, result | error} and {status: "..."} while starting up.
 const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/";
 const PYODIDE_PACKAGES = ["numpy", "pillow", "pyyaml", "packaging", "toolz", "cloudpickle"];
 importScripts(PYODIDE_URL + "pyodide.js");
 
-let py, reader;
+let py, reader, dataset;
 const queue = [];   // pending jobs; prio 0 (current file) runs before prio 1 (prefetch)
 let running = false;
 
@@ -17,7 +17,7 @@ const ready = (async () => {
   const wheels = await (await fetch("wheels/manifest.json", { cache: "no-cache" })).json();
   await py.loadPackage(wheels.map((w) => new URL("wheels/" + w, self.location).href),
                        { messageCallback: () => {} });
-  for (const f of ["compat.py", "reader.py"]) {
+  for (const f of ["compat.py", "reader.py", "dataset.py"]) {
     const src = await (await fetch("py/" + f, { cache: "no-cache" })).text();
     py.FS.writeFile("/home/pyodide/" + f, src);
   }
@@ -27,9 +27,10 @@ import sys
 sys.path.insert(0, "/home/pyodide")
 import compat
 compat.install()
-import reader, SciFiReaders
+import reader, dataset, SciFiReaders
 `);
   reader = py.pyimport("reader");
+  dataset = py.pyimport("dataset");
   self.postMessage({ status: "ready" });
 })().catch((e) => self.postMessage({ status: "error", error: String(e) }));
 
@@ -57,7 +58,9 @@ async function pump() {
     const job = queue.shift();
     try {
       const result = run(job);
-      const transfer = result && result.view && result.view.data ? [result.view.data.buffer] : [];
+      // large arrays are handed over, not copied: the view, an exported .npy, a transformed sample
+      const big = result && [result.view && result.view.data, result.npy, result.data].filter((b) => b && b.buffer);
+      const transfer = big ? big.map((b) => b.buffer) : [];
       self.postMessage({ id: job.id, ok: true, result }, transfer);
     } catch (e) {
       self.postMessage({ id: job.id, ok: false, error: pyError(e) });
@@ -69,6 +72,9 @@ async function pump() {
 
 function run(job) {
   if (!reader) throw new Error("Python failed to start");
+  if (job.op === "transform") {   // build step: one saved sample -> its block of the stacked input array
+    return toJs(dataset.transform(new Uint8Array(job.bytes), job.kind, JSON.stringify(job.params)));
+  }
   if (job.op === "show") {
     // bytes are only written to the in-memory FS when the file is not parsed yet
     if (!reader.is_loaded(job.key)) {
@@ -82,12 +88,13 @@ function run(job) {
   if (job.op === "meta") {
     return toJs(reader.metadata.callKwargs(job.key, { channel: job.channel, direction: job.direction }));
   }
-  const summary = toJs(reader.load("", job.key));
   const s = job.settings || {};
   // JS null becomes pyodide's jsnull, not None, so unset values are left out
   const kwargs = { direction: s.direction || "forward", flatten: s.flatten || "none" };
   if (s.channel != null) kwargs.channel = s.channel;
   if (s.index != null) kwargs.index = s.index;
+  if (job.op === "export") return toJs(reader.export.callKwargs(job.key, kwargs));   // the training array
+  const summary = toJs(reader.load("", job.key));
   const view = toJs(reader.render.callKwargs(job.key, kwargs));
   return { summary, view };
 }
