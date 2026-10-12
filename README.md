@@ -125,6 +125,23 @@ Samples of different sizes are brought to one shape by the build settings (the b
 | aux | **over the dataset**, per column: `(v - mean) / std` | `v = ln(x)` for `width`, `height`, `pixel_x`, `pixel_y`, `sample_std`; `v = x` for `sample_mean`, `bias_min`, `bias_max`, `n_points` |
 | output | score mode: **over the dataset** `(score - mean) / std`. Class numbers are never normalized | |
 
+The aux columns, and which of them get a logarithm before the z-score (a log is used for values that are always
+positive and span orders of magnitude; its base does not change a z-score):
+
+| Kind | Aux column | Meaning (as measured, before any resizing) | Log first? |
+| --- | --- | --- | --- |
+| image | `width`, `height` | size of the scan (nm for Nanonis files, pixels for ordinary images) | yes |
+| image | `pixel_x`, `pixel_y` | size of one pixel | yes |
+| image | `sample_mean` | mean of the sample's values | no (can be negative; near 0 after a flatten) |
+| image | `sample_std` | standard deviation of the sample's values | yes |
+| spectrum | `bias_min`, `bias_max` | bias range of the sweep (V) | no (can be negative; a linear scale) |
+| spectrum | `n_points` | number of points of the sweep | no |
+| spectrum | `sample_mean` | mean of the signal | no |
+| spectrum | `sample_std` | standard deviation of the signal | yes |
+
+With `"normalize": "none"` the same columns hold the raw values (so `sample_mean` / `sample_std` are always there),
+and `normalize.json` still lists the dataset mean and std of each column.
+
 A column (or a sample) without spread, e.g. every scan 5 nm wide, becomes 0 and is marked `"constant": true`.
 `<mode>_<kind>_normalize.json` records the method, and for every aux column and the scores the mean, std, whether a log
 was taken and its floor. To run a model on a new file: flatten as logged, resize as in `_info.json`, then normalize as
