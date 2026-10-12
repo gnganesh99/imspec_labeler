@@ -67,7 +67,9 @@ describes it (channel, flatten, shape, scan size, bias range, mean, std).
 ## 2. Build dataset: the stacked files
 
 The **Build dataset** button writes one set of files per **mode** (`binary`, `multiclass`, `score`) and per
-**kind** of data (`image`, `spectrum`, `rgb` for colour photos). Images and spectra are never mixed.
+**kind** of data (`image`, `spectrum`, `rgb` for colour photos). Images and spectra are never mixed. If one
+set cannot be built (for example images of different sizes without a `size`), the others are still built, and
+the status line under the button says why.
 
 | File | Content |
 | --- | --- |
@@ -126,13 +128,26 @@ The saved per-file arrays are never changed by any of these.
 
 | Setting | Values | Effect |
 | --- | --- | --- |
-| `size` | `null` | All images must already have the same size. If they do not, the build stops and lists the sizes it found. |
-| | `[height, width]` | Every image is brought to this size, in pixels. |
-| `method` | `"interpolate"` | Resampled to the size. NaN pixels are left out of the average. When shrinking a lot, blocks are averaged first. |
-| | `"pad_crop"` | Centred, then cropped or padded with NaN. No resampling, so the pixel size stays the same. |
+| `size` | `null` | All images must already have the same size. If they do not, the image set is not built, and the status line lists the sizes it found. Nothing is resized without you choosing how. |
+| | `[height, width]` | Every image is brought to this size, in pixels, by the `method` below. |
+| `method` | `"interpolate"` | The whole image is resampled to the size. |
+| | `"pad_crop"` | The image is centred, then cropped where it is too big and padded with NaN where it is too small. |
 
-Resizing loses the physical scale: a 15 nm scan and a 100 nm scan both become the same number of pixels. The
-scale is kept in the aux columns `width`, `height`, `pixel_x` and `pixel_y`.
+The two methods compared:
+
+| | `"interpolate"` | `"pad_crop"` |
+| --- | --- | --- |
+| Keeps | the full field of view | the pixel size (no resampling at all) |
+| Changes | the pixel size; and the aspect ratio, if the image does not have the shape of the target | loses the edges of images larger than the target |
+| NaN | NaN pixels are left out of the average, so a partial scan stays partial | the padding is NaN |
+| Shrinking | by 2x or more: blocks are averaged first, then interpolated | not applicable |
+
+- **Physical scale.** After resizing, a 15 nm scan and a 250 nm scan have the same number of pixels. Their real
+  sizes are kept in the aux columns `width`, `height`, `pixel_x` and `pixel_y`.
+- **`.3ds` slices count as images**, so a 180 x 180 grid slice is resized together with the scans.
+- **Mixed channels.** A set stacks every labeled file of its kind, whatever channel it was labeled on. Scans
+  labeled on Z and scans labeled on Current end up in the same `_input.npy`. The channel of every row is in
+  `_meta.csv`; check it there, and filter in your training code if needed.
 
 ### Spectra
 
@@ -144,6 +159,14 @@ scale is kept in the aux columns `width`, `height`, `pixel_x` and `pixel_y`.
 | | `"strict"` | No resampling: each sample keeps its own bias values. All spectra must have the same length. |
 | `points` | `null` | As many points as the longest spectrum. |
 | | a whole number | That many points on the shared bias axis. |
+
+- **Every sample in a built file has the same number of points**, whatever the setting. A `.npy` array cannot
+  hold rows of different lengths.
+
+  | `bias_range` | Points per sample | Bias values |
+  | --- | --- | --- |
+  | `"union"`, `"overlap"`, `[min, max]` | `points` for all (default: as many as the longest spectrum) | the same shared axis for every sample |
+  | `"strict"` | the original number, which must be equal for all files; if it is not, the spectrum set is not built | each sample keeps its own, so two samples can cover different ranges with the same number of points |
 
 - The bias axis is always row 0 of every sample. After resampling it is the same for every sample.
 - Each file's own range, as measured, is in the aux columns `bias_min`, `bias_max` and `n_points`.
