@@ -235,10 +235,13 @@ The mask changes the shape of the input:
 | Kind | Without mask | With mask |
 | --- | --- | --- |
 | `image` | `(n, H, W)` | `(n, 2, H, W)`: `[:, 0]` is the data, `[:, 1]` the mask |
-| `spectrum` | `(n, 3, P)` | `(n, 5, P)`: bias, forward, backward, mask of forward, mask of backward |
+| `spectrum`, no file has a backward sweep | `(n, 2, P)` | `(n, 3, P)`: bias, forward, mask of forward |
+| `spectrum`, at least one file has a backward sweep | `(n, 3, P)` | `(n, 5, P)`: bias, forward, backward, mask of forward, mask of backward |
 | `rgb` | `(n, H, W, 3)` | `(n, H, W, 4)`: the mask is the 4th channel |
 
 - The bias row has no mask, because it is never NaN.
+- The number of spectrum rows is set by the whole set: if one file has a backward sweep, every sample gets the
+  backward row. For a file without one, that row is NaN and its mask row is 0.
 - Tick both to get zero-filled data together with a mask that tells which points were filled.
 - After a z-score, 0 is the sample's average, so it is a neutral fill. With `"normalize": "none"`, 0 means zero
   in the units of the file (0 m, 0 A), which is not the average; the mask matters more in that case.
