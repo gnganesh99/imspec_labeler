@@ -79,83 +79,36 @@ Output, inside the chosen folder:
 ### Training dataset
 
 Labeling can produce the arrays for training directly (**Tools → Training dataset**).
+**Full documentation: [docs/training_data.md](docs/training_data.md)** (what is saved, the build settings,
+normalization, the NaN options, how to use the files).
 
-**While labeling** (on by default, switch: *Save a training array for every labeled file*), each labeled file gets
-one array in `labeled/training_data/arrays/`, plus a small `.json` describing it. Deferred files get none.
+In short:
 
-| Data | Saved array | Notes |
-| --- | --- | --- |
-| image (`.sxm`, `.3ds` slice, grey image) | `float32 (H, W)` | full resolution, in the file's own units (e.g. m, A), flattened **as viewed**, NaN kept (partial scans). A `.3ds` saves the slice on screen. Row 0 is the first row of the file (`origin` in the `.json`). |
-| spectrum (`.dat`) | `float32 (rows, N)` | row 0 = **bias**, row 1 = the labeled channel, row 2 = its backward sweep if recorded |
-| colour photo | `uint8 (H, W, 3)` | |
+- **While labeling** (on by default), every labeled file gets one array in `labeled/training_data/arrays/`:
+  full resolution, in the units of the file, flattened as viewed, NaN kept. Spectra are saved with their bias
+  values as the first row.
+- ***Build dataset*** stacks them into `labeled/training_data/`, per mode and kind of data:
 
-Undo and overwrite remove or replace the array with the entry.
+  | File | Content |
+  | --- | --- |
+  | `<mode>_<kind>_input.npy` | the samples, e.g. `binary_image_input.npy` `(n, H, W)` or `binary_spectrum_input.npy` `(n, rows, P)` |
+  | `<mode>_<kind>_output.npy` | the class number (1 = Good, 0 = Bad) or the score |
+  | `<mode>_<kind>_aux.npy` | scan size and pixel size, or bias range, plus each sample's mean and std |
+  | `<mode>_<kind>_normalize.json`, `_meta.csv`, `_info.json` | how the arrays were normalized, the raw values per sample, shapes and layout |
 
-***Build dataset*** stacks them, per mode and kind of data, into `labeled/training_data/` (rebuild whenever you have labeled more):
+- **Settings** (the box above the button, saved in `labeled/dataset.json`):
 
-| File | Content |
-| --- | --- |
-| `<mode>_<kind>_input.npy` | `float32 (n, ...)`: one sample per labeled file, files oldest first. `<mode>` = `binary`, `multiclass`, `score`; `<kind>` = `image`, `spectrum`, `rgb` |
-| `<mode>_<kind>_output.npy` | `(n,)`: `class_id` for binary / multiclass (e.g. 1 = Good, 0 = Bad), the score for score mode |
-| `<mode>_<kind>_aux.npy` | `float64 (n, k)`, from the data as measured, before any resizing. Images: `width, height, pixel_x, pixel_y` (nm for Nanonis files), `sample_mean, sample_std`. Spectra: `bias_min, bias_max, n_points, sample_mean, sample_std` |
-| `<mode>_<kind>_normalize.json` | how the three arrays were normalized, with the numbers needed to repeat it at inference |
-| `<mode>_<kind>_meta.csv`, `_info.json` | one line per sample with the **raw** values (file, channel, flatten, original shape, sizes, mean, std, ...); shapes, class numbers, the transform used |
-
-Labels made before this feature (or with saving switched off) are filled in from the original files when you build.
-
-Samples of different sizes are brought to one shape by the build settings (the box above the button, kept in
-`labeled/dataset.json`); the saved per-file arrays are never changed:
-
-```jsonc
-{
-  "image":    { "size": null, "method": "interpolate" },     // size: [height, width], or null = all images must match
-                                                             // method: "interpolate" (NaN-aware) or "pad_crop" (pads with NaN)
-  "spectrum": { "points": null, "bias_range": "union" },     // "union": whole bias range of all files, NaN where a file
-                                                             //   did not measure; "overlap"; [min, max]; "strict" = as saved
-                                                             // points: null = as many as the longest spectrum
-  "normalize": "zscore"                                      // or "none": everything stays in the units of the file
-}
-```
-
-**Normalization** (`"normalize": "zscore"`, the default). All statistics use non-NaN values only; NaN stays NaN.
-
-| Array | How | Statistics |
-| --- | --- | --- |
-| input | **per sample**: `(x - sample_mean) / sample_std` | each sample's own mean and std (from its full-resolution array, so a resized sample is close to, not exactly, mean 0 / std 1). Spectra: the signal rows only, the bias row stays in volts |
-| aux | **over the dataset**, per column: `(v - mean) / std` | `v = ln(x)` for `width`, `height`, `pixel_x`, `pixel_y`, `sample_std`; `v = x` for `sample_mean`, `bias_min`, `bias_max`, `n_points` |
-| output | score mode: **over the dataset** `(score - mean) / std`. Class numbers are never normalized | |
-
-The aux columns, and which of them get a logarithm before the z-score (a log is used for values that are always
-positive and span orders of magnitude; its base does not change a z-score):
-
-| Kind | Aux column | Meaning (as measured, before any resizing) | Log first? |
-| --- | --- | --- | --- |
-| image | `width`, `height` | size of the scan (nm for Nanonis files, pixels for ordinary images) | yes |
-| image | `pixel_x`, `pixel_y` | size of one pixel | yes |
-| image | `sample_mean` | mean of the sample's values | no (can be negative; near 0 after a flatten) |
-| image | `sample_std` | standard deviation of the sample's values | yes |
-| spectrum | `bias_min`, `bias_max` | bias range of the sweep (V) | no (can be negative; a linear scale) |
-| spectrum | `n_points` | number of points of the sweep | no |
-| spectrum | `sample_mean` | mean of the signal | no |
-| spectrum | `sample_std` | standard deviation of the signal | yes |
-
-With `"normalize": "none"` the same columns hold the raw values (so `sample_mean` / `sample_std` are always there),
-and `normalize.json` still lists the dataset mean and std of each column.
-
-A column (or a sample) without spread, e.g. every scan 5 nm wide, becomes 0 and is marked `"constant": true`.
-`<mode>_<kind>_normalize.json` records the method, and for every aux column and the scores the mean, std, whether a log
-was taken and its floor. To run a model on a new file: flatten as logged, resize as in `_info.json`, then normalize as
-in this file (the input needs only the new sample's own mean and std). After a z-score, replacing NaN by 0 means
-"the average value", a convenient fill for training.
+  | Setting | Default | Purpose |
+  | --- | --- | --- |
+  | `image.size`, `image.method` | `null`, `"interpolate"` | bring images of different sizes to one size |
+  | `spectrum.bias_range`, `spectrum.points` | `"union"`, `null` | put spectra on one bias axis |
+  | `normalize` | `"zscore"` | inputs per sample, aux and scores over the dataset; or `"none"` |
+  | `nan_to_zero`, `nan_mask` | `false`, `false` | the two checkboxes: fill NaN with 0, add a mask (1 = data) |
 
 ```python
 import numpy as np
-X = np.load("labeled/training_data/binary_image_input.npy")     # (n, H, W) float32, may contain NaN
+X = np.load("labeled/training_data/binary_image_input.npy")     # (n, H, W) float32
 y = np.load("labeled/training_data/binary_image_output.npy")    # (n,)      1 = Good, 0 = Bad
-aux = np.load("labeled/training_data/binary_image_aux.npy")     # (n, 6)    width, height, pixel_x, pixel_y, sample_mean, sample_std
-X = np.nan_to_num(X, nan=0.0)                                   # after the z-score, 0 is the sample's average
-
-S = np.load("labeled/training_data/binary_spectrum_input.npy")  # (n, rows, P): S[:, 0] = bias, S[:, 1] = signal
 ```
 
 ### Run locally (e.g. offline lab PC)

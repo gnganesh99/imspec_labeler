@@ -242,6 +242,10 @@
             <code>_output.npy</code> and <code>_aux.npy</code> in <code>labeled/training_data/</code>, using the settings below.</p>
           <textarea id="dsText" rows="12" spellcheck="false" disabled></textarea>
           <div class="sub" id="dsMsg"></div>
+          <label class="chk" title="In the built input and aux arrays, NaN becomes 0. After a z-score, 0 is the sample's average.">
+            <input type="checkbox" id="dsNanZero"> NaN to zero</label>
+          <label class="chk" title="Adds a mask to the built input: 1 where there is data, 0 where it was NaN.">
+            <input type="checkbox" id="dsNanMask"> Add NaN mask</label>
           <button id="dsBuild" disabled>Build dataset</button>
           <div class="sub" id="dsStatus"></div>
         </div>

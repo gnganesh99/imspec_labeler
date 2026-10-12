@@ -155,6 +155,31 @@ def stats(data, kind):
     return {"sample_mean": mean, "sample_std": std}
 
 
+# ----------------------------------------------------------------------------- NaN
+
+def nan_handling(out, kind, to_zero, mask):
+    """Last step of the build, after the normalization.
+
+    ``to_zero``: values that are not finite become 0 (after a z-score, 0 is the sample's average).
+    ``mask``:    a mask is added, 1 where the sample has data and 0 where it had none:
+
+    * image:    (H, W)       -> (2, H, W)           [0] the data, [1] the mask
+    * rgb:      (H, W, 3)    -> (H, W, 4)           the mask is the 4th channel (a pixel counts if all 3 are there)
+    * spectrum: (rows, P)    -> (rows + rows-1, P)  one mask row per signal row, after the signal rows
+                                                    (the bias row has no mask)
+    """
+    out = np.asarray(out, dtype=np.float32)
+    finite = np.isfinite(out)
+    data = np.where(finite, out, 0.0).astype(np.float32) if to_zero else out
+    if not mask:
+        return data
+    if kind == "spectrum":
+        return np.vstack([data, finite[1:].astype(np.float32)])
+    if kind == "rgb":
+        return np.concatenate([data, finite.all(axis=-1, keepdims=True).astype(np.float32)], axis=-1)
+    return np.stack([data, finite.astype(np.float32)])
+
+
 # ----------------------------------------------------------------------------- build step
 
 def transform(data, kind, params):
@@ -165,6 +190,7 @@ def transform(data, kind, params):
       images:  {"size": [H, W], "method": "interpolate" | "pad_crop"}
       spectra: {"grid": {"min", "max", "points"} | null, "rows": n}
       both:    {"normalize": "zscore" | "none", "mean": ..., "std": ...}   (the sample's own statistics)
+               {"nan_to_zero": bool, "nan_mask": bool}                    (see ``nan_handling``)
     Returns {"data": raw little-endian float32 bytes, "shape": [...]}.
     """
     if isinstance(params, str):
@@ -185,5 +211,6 @@ def transform(data, kind, params):
         out = resize_pad_crop(a, size) if params.get("method") == "pad_crop" else resize_interpolate(a, size)
         if norm:
             out = zscore(out, mean, std)
+    out = nan_handling(out, kind, bool(params.get("nan_to_zero")), bool(params.get("nan_mask")))
     out = np.ascontiguousarray(out, dtype="<f4")
     return {"data": out.tobytes(), "shape": list(out.shape)}

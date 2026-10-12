@@ -16,6 +16,8 @@ const DEFAULT_DATASET = {
   image: { size: null, method: "interpolate" },        // size null: every image must already have the same size
   spectrum: { points: null, bias_range: "union" },     // points null: as many as the longest spectrum
   normalize: "zscore",   // inputs: each sample by its own mean / std; aux and scores: over the whole dataset. Or "none".
+  nan_to_zero: false,    // built input and aux: NaN -> 0 (the two checkboxes next to the Build button)
+  nan_mask: false,       // built input: add a mask, 1 = data, 0 = was NaN
 };
 // aux columns. log: taken before the z-score, for positive values that span orders of magnitude
 const AUX_COLUMNS = {
@@ -148,6 +150,7 @@ function validateDataset(c) {
       return 'spectrum.bias_range must be "union", "overlap", "strict" or [min, max].';
   }
   if (c.normalize !== undefined && !["none", "zscore"].includes(c.normalize)) return 'normalize must be "zscore" or "none".';
+  for (const k of ["nan_to_zero", "nan_mask"]) if (c[k] !== undefined && typeof c[k] !== "boolean") return `${k} must be true or false.`;
   return null;
 }
 
@@ -155,7 +158,9 @@ function mergeDataset(user) {
   user = user && typeof user === "object" ? user : {};
   return { image: { ...DEFAULT_DATASET.image, ...(user.image || {}) },
            spectrum: { ...DEFAULT_DATASET.spectrum, ...(user.spectrum || {}) },
-           normalize: user.normalize ?? DEFAULT_DATASET.normalize };
+           normalize: user.normalize ?? DEFAULT_DATASET.normalize,
+           nan_to_zero: user.nan_to_zero ?? DEFAULT_DATASET.nan_to_zero,
+           nan_mask: user.nan_mask ?? DEFAULT_DATASET.nan_mask };
 }
 
 function checkDatasetText() {
@@ -164,6 +169,10 @@ function checkDatasetText() {
   $("dsMsg").textContent = error || "";
   $("dsMsg").style.color = "var(--bad)";
   $("dsBuild").disabled = !!error || !state.dir;
+  if (!error) {   // the checkboxes show what the text says
+    $("dsNanZero").checked = !!parsed.nan_to_zero;
+    $("dsNanMask").checked = !!parsed.nan_mask;
+  }
   return error ? null : mergeDataset(parsed);
 }
 
@@ -340,8 +349,26 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
   }
   const zs = cfg.normalize === "zscore";
   const prefix = `${mode}_${kind}`;
+  // NaN options: applied last (after the normalization). The mask changes the shape of a sample.
+  Object.assign(params, { nan_to_zero: !!cfg.nan_to_zero, nan_mask: !!cfg.nan_mask });
+  let layout = kind === "spectrum" ? "rows: 0 = bias, then the signal (forward, backward if recorded)"
+    : kind === "rgb" ? "(H, W, 3): red, green, blue" : "(H, W)";
+  if (cfg.nan_mask) {
+    if (kind === "spectrum") {
+      layout += `; rows ${sample[0]}..${2 * sample[0] - 2}: mask of each signal row (1 = data, 0 = was NaN)`;
+      sample = [2 * sample[0] - 1, sample[1]];
+    } else if (kind === "rgb") {
+      layout = "(H, W, 4): red, green, blue, mask (1 = data, 0 = was NaN)";
+      sample = [sample[0], sample[1], 4];
+    } else {
+      layout = "(2, H, W): [0] the data, [1] the mask (1 = data, 0 = was NaN)";
+      sample = [2, ...sample];
+    }
+  }
   const norm = { normalize: cfg.normalize, built: localTimestamp(), samples: n,
-                 note: "All statistics use non-NaN values only. NaN stays NaN in the arrays." };
+                 note: "All statistics use non-NaN values only." + (cfg.nan_to_zero ? " NaN was then replaced by 0 in the input and aux arrays."
+                   : " NaN stays NaN in the arrays."),
+                 nan_to_zero: !!cfg.nan_to_zero, nan_mask: !!cfg.nan_mask };
 
   // inputs: streamed sample by sample, so the memory use stays small however many files there are
   const w = await (await outDir.getFileHandle(`${prefix}_input.npy`, { create: true })).createWritable();
@@ -363,7 +390,8 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
 
   // outputs
   const info = { mode, kind, samples: n, built: localTimestamp(), order: "files oldest first (as listed in the app)",
-                 input: { file: `${prefix}_input.npy`, dtype: "float32", shape: [n, ...sample], nan: "kept where there is no data" },
+                 input: { file: `${prefix}_input.npy`, dtype: "float32", shape: [n, ...sample], sample_layout: layout,
+                          nan: cfg.nan_to_zero ? "replaced by 0" : "kept where there is no data", mask: !!cfg.nan_mask },
                  transform: params, normalize: cfg.normalize };
   norm.input = zs
     ? { scope: "per sample", formula: "(x - sample_mean) / sample_std",
@@ -411,14 +439,14 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
   AUX_COLUMNS[kind].forEach(([name, log], j) => {
     const raw = items.map((it) => (Number.isFinite(it.meta[name]) ? it.meta[name] : NaN));
     const d = datasetZscore(raw, log);
-    (zs ? d.z : raw).forEach((v, i) => { aux[i * cols.length + j] = v; });
+    (zs ? d.z : raw).forEach((v, i) => { aux[i * cols.length + j] = cfg.nan_to_zero && !Number.isFinite(v) ? 0 : v; });
     norm.aux.columns[name] = d.stats;
   });
   await writeFile(outDir, `${prefix}_aux.npy`, npyFile("<f8", [n, cols.length], aux));
   await writeFile(outDir, `${prefix}_normalize.json`, JSON.stringify(norm, null, 2) + "\n");
   info.aux = { file: `${prefix}_aux.npy`, dtype: "float64", columns: cols, values: zs ? "z-scores (see normalize.json)" : "raw",
                units: kind === "spectrum" ? items[0].meta.bias_units : items[0].meta.extent_units };
-  if (kind === "spectrum") info.input.rows = "row 0 = bias, then the signal (forward, backward if recorded)";
+
 
   // meta: one line per sample, same order as the arrays
   const head = ["index", "file", "channel", "direction", "flatten", "array", "label", "class_id", "score", "original_shape",
@@ -445,5 +473,18 @@ function initDataset() {
   $("dsText").oninput = checkDatasetText;
   $("dsText").onkeydown = (e) => { if (e.key === "Escape") e.target.blur(); };
   $("dsBuild").onclick = (e) => { buildDataset(); e.currentTarget.blur(); };
+  // the two NaN checkboxes are the same settings as "nan_to_zero" / "nan_mask" in the text box
+  for (const [id, key] of [["dsNanZero", "nan_to_zero"], ["dsNanMask", "nan_mask"]]) {
+    $(id).onchange = (e) => {
+      const want = e.target.checked;        // read first: checking the text sets the boxes from the text
+      const cfg = checkDatasetText();
+      if (cfg) {
+        cfg[key] = want;
+        $("dsText").value = JSON.stringify(cfg, null, 2);
+        checkDatasetText();
+      } else e.target.checked = !want;      // the text is not valid JSON right now: fix that first
+      e.target.blur();
+    };
+  }
   checkDatasetText();
 }
