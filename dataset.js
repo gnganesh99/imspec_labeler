@@ -28,7 +28,7 @@ const AUX_COLUMNS = {
 let datasetConfig = structuredClone(DEFAULT_DATASET);
 
 function arraysOn() {
-  try { return localStorage.getItem("spm-labeler-arrays") !== "off"; } catch { return true; }   // on by default
+  try { return localStorage.getItem("spm-labeler-arrays") === "on"; } catch { return false; }   // off by default
 }
 
 // --------------------------------------------------------------------------- one array per labeled file

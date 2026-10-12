@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS = {
   dat: {}, img: { flatten: "none", cmap: "gray" },
 };
 
-const APP_VERSION = "2026-10-12c · NaN to zero and NaN mask for the built arrays";   // shown in the header: tells which build runs
+const APP_VERSION = "2026-10-12d · Data menu";   // shown in the header: tells which build runs
 const $ = (id) => document.getElementById(id);
 const state = {
   dir: null, config: mergeConfig({}), userConfig: {}, mode: "binary", scoreBuf: "",

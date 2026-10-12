@@ -124,7 +124,7 @@ function buildLabelButtons() {
       const hint = document.createElement("div");
       hint.className = "sub";
       hint.style.gridColumn = "1 / -1";
-      hint.innerHTML = 'No classes yet. Add them under <b>Tools → Labeling settings</b> (multiclass.classes). ';
+      hint.innerHTML = 'No classes yet. Add them under <b>Data → Labeling settings</b> (multiclass.classes). ';
       const open = document.createElement("button");
       open.textContent = "Open settings";
       open.onclick = () => { openSettings(); open.blur(); };
@@ -297,7 +297,7 @@ async function saveConfig() {
 }
 
 function openSettings() {
-  if (!panels.tools) $("toolsBtn").click();
+  if (!panels.data) $("dataBtn").click();
   $("cfgBox").open = true;
   $("cfgBox").scrollIntoView({ block: "nearest" });
 }

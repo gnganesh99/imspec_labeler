@@ -6,7 +6,7 @@ function loadJson(key) { try { return JSON.parse(localStorage.getItem(key) || "{
 function saveJson(key, value) { try { localStorage.setItem(key, JSON.stringify(value)); } catch {} }
 
 const tools = { readout: true, width: 5, ...loadJson("spm-labeler-tools"), profile: false };
-const panels = { view: false, tools: false, meta: true, profile: false, ...loadJson("spm-labeler-panels") };
+const panels = { view: false, tools: false, data: false, meta: true, profile: false, ...loadJson("spm-labeler-panels") };
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
 
 // --------------------------------------------------------------------------- display model
@@ -386,14 +386,17 @@ function initTools() {
   const setPanels = () => {
     $("viewPanel").classList.toggle("hidden", !panels.view);
     $("toolsPanel").classList.toggle("hidden", !panels.tools);
-    $("drawer").classList.toggle("hidden", !panels.view && !panels.tools);
+    $("dataPanel").classList.toggle("hidden", !panels.data);
+    $("drawer").classList.toggle("hidden", !panels.view && !panels.tools && !panels.data);
     $("viewBtn").classList.toggle("on", panels.view);
     $("toolsBtn").classList.toggle("on", panels.tools);
+    $("dataBtn").classList.toggle("on", panels.data);
     saveJson("spm-labeler-panels", panels);
   };
   setPanels();
   $("viewBtn").onclick = (e) => { panels.view = !panels.view; setPanels(); e.currentTarget.blur(); };
   $("toolsBtn").onclick = (e) => { panels.tools = !panels.tools; setPanels(); e.currentTarget.blur(); };
+  $("dataBtn").onclick = (e) => { panels.data = !panels.data; setPanels(); e.currentTarget.blur(); };
 
   let clipTimer = 0;   // redraw at most every ~30 ms while the slider moves
   $("vClip").oninput = (e) => {

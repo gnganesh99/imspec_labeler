@@ -17,7 +17,7 @@ saved, how the dataset is built, and every setting that changes the result.
 
 ## Overview
 
-Everything is under **Tools → Training dataset** in the app, and everything is written inside
+Everything is under **Data → Training dataset** in the app, and everything is written inside
 `labeled/training_data/` of your data folder.
 
 ```
@@ -43,7 +43,9 @@ There are two steps:
 
 ## 1. While labeling: one array per file
 
-Switch: *Save a training array for every labeled file* (on by default, remembered in the browser).
+Switch: *Save a training array for every labeled file*. It is **off by default**; tick it before you label.
+The choice is remembered in the browser. Files labeled while it was off are not lost: their arrays are made
+from the original files when you build.
 
 Each labeled file gets one `.npy` in `labeled/training_data/arrays/`, and a small `.json` next to it that
 describes it (channel, flatten, shape, scan size, bias range, mean, std).

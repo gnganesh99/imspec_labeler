@@ -17,7 +17,7 @@ and `jpg / png / tif / bmp / gif / webp` images.
 ### Modes and settings
 
 Pick the mode in the header, top left (**Binary** by default, **Multiclass** or **Score**). The settings box under
-**Tools → Labeling settings** shows only the options of the current mode, validated while you type; *Save to folder*
+**Data → Labeling settings** shows only the options of the current mode, validated while you type; *Save to folder*
 writes them to `labeled/labeler.json` (loaded when you open the folder again, together with the last mode). Nothing else is written to the data folder itself; a `labeler.json` left there by an earlier version is still read if `labeled/` has none.
 
 | Mode | Settings box | Written to the log |
@@ -52,7 +52,7 @@ Files are ordered **oldest first by modified time** (all types mixed; ties by na
 every file with its label chip; search by name or label, filter (All / Unlabeled / each class / Deferred), and click a
 row (or press Enter in the search box) to jump there. Jumping does not label anything in between.
 
-**View** and **Tools** (buttons in the header) open panels to the left of the sidebar:
+**View**, **Tools** and **Data** (buttons in the header) open panels to the left of the sidebar:
 
 - *View*: **Colormap** (also `C`), **Contrast** slider (percent clipped at each end, default 1 %, 0 = full range; the colorbar follows), **Theme** (Auto / Light / Dark), **Transpose**, **Origin** (auto / upper / lower) and **Scale** (axis ticks / scale bar / none). Only the image
   is transformed; the axis ticks keep their meaning (x to the right, y upwards), so you can correct a mixed-up
@@ -60,6 +60,8 @@ row (or press Enter in the search box) to jump there. Jumping does not label any
 - *Tools*: **Flatten** (also `F`), **Line profile** (a drop down; open it, turn on *Draw line*, drag on an image; values in the channel's units vs distance; averaging
   width in px, default 5; *Export profile as CSV*; `Esc` clears the line), **Pixel readout** (position and value
   follow the cursor), and **Metadata** (key facts from the file header plus a searchable list of all fields).
+- *Data*: **Labeling settings** (classes, multiclass numbering, score range; see *Modes and settings*) and
+  **Training dataset** (see below).
 
 Output, inside the chosen folder:
 
@@ -78,13 +80,13 @@ Output, inside the chosen folder:
 
 ### Training dataset
 
-Labeling can produce the arrays for training directly (**Tools → Training dataset**).
+Labeling can produce the arrays for training directly (**Data → Training dataset**).
 **Full documentation: [docs/training_data.md](docs/training_data.md)** (what is saved, the build settings,
 normalization, the NaN options, how to use the files).
 
 In short:
 
-- **While labeling** (on by default), every labeled file gets one array in `labeled/training_data/arrays/`:
+- **While labeling**, when *Save a training array for every labeled file* is ticked (off by default), every labeled file gets one array in `labeled/training_data/arrays/`:
   full resolution, in the units of the file, flattened as viewed, NaN kept. Spectra are saved with their bias
   values as the first row.
 - ***Build dataset*** stacks them into `labeled/training_data/`, per mode and kind of data:
@@ -131,7 +133,7 @@ One-time setup: *Settings → Pages → Source: GitHub Actions*.
 | File | Role |
 | --- | --- |
 | `index.html`, `app.js` | UI, keys, canvas / uPlot rendering, folder IO (File System Access API) |
-| `tools.js` | View / Tools panels: transpose / origin, axes + scale bar, pixel readout, line profile, metadata |
+| `tools.js` | View / Tools / Data panels: transpose / origin, axes + scale bar, pixel readout, line profile, metadata |
 | `modes.js` | labeling modes (binary / multiclass / score), `labeler.json` validation and the settings editor |
 | `dataset.js` | training data: one array per labeled file, and the *Build dataset* step |
 | `worker.js` | loads Pyodide + wheels, runs `py/reader.py` off the UI thread |
