@@ -7,7 +7,9 @@ const LOG_FILE = "classification_log.csv";
 // one row per file and mode: binary / multiclass rows fill label (+ class_id), score rows fill score
 // flatten: the flatten type applied to the image when the entry was made (empty for spectra)
 // array: the training array saved for this entry (a file in labeled/training_data/arrays/), empty when none was saved
-const LOG_COLUMNS = ["file", "type", "channel", "flatten", "mode", "label", "class_id", "score", "tags", "note", "array", "timestamp"];
+// sample_mean / sample_std: mean and std of the labeled array's non-NaN values, in the units of the file
+const LOG_COLUMNS = ["file", "type", "channel", "flatten", "mode", "label", "class_id", "score", "tags", "note", "array",
+                     "sample_mean", "sample_std", "timestamp"];
 const DEFER_LABEL = "Deferred";   // always available on key D; copies go to labeled/deferred/
 const COPY_MODES = ["none", "original", "image"];
 const SUPPORTED = /\.(sxm|dat|3ds|jpe?g|png|bmp|gif|webp|tiff?)$/i;
@@ -20,7 +22,7 @@ const DEFAULT_SETTINGS = {
   dat: {}, img: { flatten: "none", cmap: "gray" },
 };
 
-const APP_VERSION = "2026-10-12 · training arrays and Build dataset";   // shown in the header: tells which build runs
+const APP_VERSION = "2026-10-12b · normalization, mean / std in the log";   // shown in the header: tells which build runs
 const $ = (id) => document.getElementById(id);
 const state = {
   dir: null, config: mergeConfig({}), userConfig: {}, mode: "binary", scoreBuf: "",
@@ -508,11 +510,15 @@ function record(fields) {
   const flatten = view && (view.kind === "image" || view.kind === "cube") ? state.settings[cur.type].flatten : "";
   const row = {
     file: cur.name, type: cur.type, channel, flatten, mode, label: "", class_id: "", score: "", tags: "",
-    note: state.note, array: "", timestamp: localTimestamp(), ...fields,
+    note: state.note, array: "", sample_mean: "", sample_std: "", timestamp: localTimestamp(), ...fields,
   };
-  // training array (dataset.js): what is on screen now, written after the log entry; deferred files have no output
-  const snap = view && arraysOn() && row.label !== DEFER_LABEL ? arraySnapshot(cur, view, state.settings[cur.type]) : null;
-  if (snap) row.array = snap.array;
+  // what is on screen now (dataset.js): its mean / std always go into the log; the training array is saved when
+  // that is switched on, except for deferred files, which have no output
+  const snap = view ? arraySnapshot(cur, view, state.settings[cur.type]) : null;
+  if (snap) {
+    snap.save = arraysOn() && row.label !== DEFER_LABEL;
+    if (snap.save) row.array = snap.array;
+  }
   state.note = "";
   $("noteChip").classList.add("hidden");
   const previous = rowOf(cur.name);   // set when reviewing an already labeled file
@@ -522,6 +528,16 @@ function record(fields) {
   // snapshot now: the canvas is redrawn for the next file before the IO runs
   const snapshot = copy === "image" && row.label ? snapshotView() : null;
   queueIO(async () => {
+    if (snap) {   // first, so that the statistics are part of the row that is written
+      try {
+        const meta = await saveArray(snap);
+        row.sample_mean = numText(meta.sample_mean);
+        row.sample_std = numText(meta.sample_std);
+      } catch (e) {
+        row.array = "";
+        toast(`Could not ${snap.save ? "save the training array" : "get the statistics"} for ${cur.name}: ${e.message}`, 8000);
+      }
+    }
     if (previous) {   // overwrite: drop the old row (of this mode) and its copies, so Undo reverts the latest action
       const rows = (await readLog()).filter((r) => !(r.file === cur.name && r.mode === mode));
       await writeLog([...rows, row]);
@@ -530,9 +546,6 @@ function record(fields) {
     } else await appendLog(row);
     if (row.label && snapshot) await writeJpeg(snapshot, jpegName(cur.name), row.label);
     else if (row.label && copy === "original") await copyInto(cur.name, row.label);
-    if (snap) {
-      await saveArray(snap).catch((e) => toast(`Could not save the training array for ${cur.name}: ${e.message}`, 8000));
-    }
   }, `Could not save the entry for ${cur.name}`);
   const shown = row.label || row.score, was = previous ? chipText(previous) : "";
   toast(`${cur.name} → ${shown}${previous ? " (was " + was + ")" : ""}`);

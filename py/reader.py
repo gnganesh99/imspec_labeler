@@ -337,7 +337,7 @@ def si_scale(max_abs, units):
 
 # ----------------------------------------------------------------------------- training arrays
 
-def export(key, channel=None, direction="forward", flatten="none", index=None):
+def export(key, channel=None, direction="forward", flatten="none", index=None, with_array=True):
     """The training array for one channel of a loaded file, plus what is needed to interpret it.
 
     Full resolution, in the units of the file (no display scaling), NaN kept:
@@ -346,6 +346,9 @@ def export(key, channel=None, direction="forward", flatten="none", index=None):
       Row 0 is the first row of the file (see ``origin`` in the returned meta).
     * rgb:          uint8 (H, W, 3)
     * spectrum:     float32 (rows, N): row 0 = the swept axis (bias), then one row per direction
+
+    ``meta`` carries ``sample_mean`` / ``sample_std``: the statistics of the array's non-NaN values
+    (spectra: of the signal rows). With ``with_array=False`` only the meta is returned (``npy`` is None).
 
     Returns {"kind", "npy": bytes of a .npy file, "meta": {...}}. Raises KeyError for an unknown channel.
     """
@@ -395,8 +398,9 @@ def export(key, channel=None, direction="forward", flatten="none", index=None):
         meta.update(origin=entry["origin"], extent_units=entry["x"]["units"], width=width, height=height,
                     pixel_x=width / arr.shape[1], pixel_y=height / arr.shape[0])
 
-    meta.update(shape=list(arr.shape), dtype=str(arr.dtype))
-    return {"kind": meta["kind"], "npy": dataset.to_npy(arr), "meta": meta}
+    mean, std = dataset.sample_stats(arr, meta["kind"])
+    meta.update(shape=list(arr.shape), dtype=str(arr.dtype), sample_mean=mean, sample_std=std)
+    return {"kind": meta["kind"], "npy": dataset.to_npy(arr) if with_array else None, "meta": meta}
 
 
 # ----------------------------------------------------------------------------- metadata

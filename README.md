@@ -63,13 +63,15 @@ row (or press Enter in the search box) to jump there. Jumping does not label any
 
 Output, inside the chosen folder:
 
-- `labeled/classification_log.csv` with columns `file, type, channel, flatten, mode, label, class_id, score, tags, note, array, timestamp`:
+- `labeled/classification_log.csv` with columns `file, type, channel, flatten, mode, label, class_id, score, tags, note, array, sample_mean, sample_std, timestamp`:
   **one row per file and mode**, all modes in the same log. Binary and multiclass rows fill `label` (multiclass also
   `class_id`), score rows fill `score`. Each mode keeps its own progress: files already in the log for the current
   mode are skipped when the folder is opened again. Older logs without `mode` / `class_id` are upgraded automatically
   (their rows count as binary). `flatten` is the flatten type that was applied to the image when the entry was made
   (`none`, `offset` = line offset, `line` = line-wise fit, `plane`); it is empty for spectra and colour photos.
   `array` is the training array saved for the entry, a file in `labeled/training_data/arrays/` (see *Training dataset* below).
+  `sample_mean` / `sample_std` are the mean and standard deviation of what was labeled (non-NaN values only, in the
+  units of the file, after the flatten; for spectra: of the signal, not the bias). They are logged for every entry.
 - `labeled/<label>/`: copies of labeled files, depending on the sidebar's *Copy* option: **do not copy**
   (default; only the CSV is written), **original file**, or **image**: a jpeg of the current view (channel,
   flatten and colormap as shown; the plot for spectra, in the current light/dark theme), named `<file name>.jpg`.
@@ -95,8 +97,9 @@ Undo and overwrite remove or replace the array with the entry.
 | --- | --- |
 | `<mode>_<kind>_input.npy` | `float32 (n, ...)`: one sample per labeled file, files oldest first. `<mode>` = `binary`, `multiclass`, `score`; `<kind>` = `image`, `spectrum`, `rgb` |
 | `<mode>_<kind>_output.npy` | `(n,)`: `class_id` for binary / multiclass (e.g. 1 = Good, 0 = Bad), the score for score mode |
-| `<mode>_<kind>_aux.npy` | `float64 (n, k)`, as measured, before any resizing. Images: `width, height, pixel_x, pixel_y` (nm for Nanonis files). Spectra: `bias_min, bias_max, n_points` |
-| `<mode>_<kind>_meta.csv`, `_info.json` | one line per sample (file, channel, flatten, original shape, ...); shapes, class numbers, the transform used |
+| `<mode>_<kind>_aux.npy` | `float64 (n, k)`, from the data as measured, before any resizing. Images: `width, height, pixel_x, pixel_y` (nm for Nanonis files), `sample_mean, sample_std`. Spectra: `bias_min, bias_max, n_points, sample_mean, sample_std` |
+| `<mode>_<kind>_normalize.json` | how the three arrays were normalized, with the numbers needed to repeat it at inference |
+| `<mode>_<kind>_meta.csv`, `_info.json` | one line per sample with the **raw** values (file, channel, flatten, original shape, sizes, mean, std, ...); shapes, class numbers, the transform used |
 
 Labels made before this feature (or with saving switched off) are filled in from the original files when you build.
 
@@ -110,15 +113,30 @@ Samples of different sizes are brought to one shape by the build settings (the b
   "spectrum": { "points": null, "bias_range": "union" },     // "union": whole bias range of all files, NaN where a file
                                                              //   did not measure; "overlap"; [min, max]; "strict" = as saved
                                                              // points: null = as many as the longest spectrum
-  "normalize": "none"                                        // or "minmax" / "zscore", per sample (never the bias row)
+  "normalize": "zscore"                                      // or "none": everything stays in the units of the file
 }
 ```
+
+**Normalization** (`"normalize": "zscore"`, the default). All statistics use non-NaN values only; NaN stays NaN.
+
+| Array | How | Statistics |
+| --- | --- | --- |
+| input | **per sample**: `(x - sample_mean) / sample_std` | each sample's own mean and std (from its full-resolution array, so a resized sample is close to, not exactly, mean 0 / std 1). Spectra: the signal rows only, the bias row stays in volts |
+| aux | **over the dataset**, per column: `(v - mean) / std` | `v = ln(x)` for `width`, `height`, `pixel_x`, `pixel_y`, `sample_std`; `v = x` for `sample_mean`, `bias_min`, `bias_max`, `n_points` |
+| output | score mode: **over the dataset** `(score - mean) / std`. Class numbers are never normalized | |
+
+A column (or a sample) without spread, e.g. every scan 5 nm wide, becomes 0 and is marked `"constant": true`.
+`<mode>_<kind>_normalize.json` records the method, and for every aux column and the scores the mean, std, whether a log
+was taken and its floor. To run a model on a new file: flatten as logged, resize as in `_info.json`, then normalize as
+in this file (the input needs only the new sample's own mean and std). After a z-score, replacing NaN by 0 means
+"the average value", a convenient fill for training.
 
 ```python
 import numpy as np
 X = np.load("labeled/training_data/binary_image_input.npy")     # (n, H, W) float32, may contain NaN
 y = np.load("labeled/training_data/binary_image_output.npy")    # (n,)      1 = Good, 0 = Bad
-aux = np.load("labeled/training_data/binary_image_aux.npy")     # (n, 4)    width, height, pixel_x, pixel_y
+aux = np.load("labeled/training_data/binary_image_aux.npy")     # (n, 6)    width, height, pixel_x, pixel_y, sample_mean, sample_std
+X = np.nan_to_num(X, nan=0.0)                                   # after the z-score, 0 is the sample's average
 
 S = np.load("labeled/training_data/binary_spectrum_input.npy")  # (n, rows, P): S[:, 0] = bias, S[:, 1] = signal
 ```

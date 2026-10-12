@@ -3,7 +3,8 @@
 // "Build dataset" stacks them into training_data/, per mode and kind of data:
 //   <mode>_<kind>_input.npy   (n, ...)  float32      kind: image | rgb | spectrum
 //   <mode>_<kind>_output.npy  (n,)      class_id (binary / multiclass) or score
-//   <mode>_<kind>_aux.npy     (n, k)    scan size / pixel size, or bias range, per sample
+//   <mode>_<kind>_aux.npy     (n, k)    scan size / pixel size or bias range, and each sample's own mean / std
+//   <mode>_<kind>_normalize.json        how the arrays were normalized (needed again at inference)
 //   <mode>_<kind>_meta.csv, <mode>_<kind>_info.json
 // Uses globals from app.js / modes.js (state, call, readLog, toast, MODES, ...) only inside functions.
 "use strict";
@@ -14,12 +15,13 @@ const DATASET_FILE = "dataset.json";
 const DEFAULT_DATASET = {
   image: { size: null, method: "interpolate" },        // size null: every image must already have the same size
   spectrum: { points: null, bias_range: "union" },     // points null: as many as the longest spectrum
-  normalize: "none",
+  normalize: "zscore",   // inputs: each sample by its own mean / std; aux and scores: over the whole dataset. Or "none".
 };
+// aux columns. log: taken before the z-score, for positive values that span orders of magnitude
 const AUX_COLUMNS = {
-  image: ["width", "height", "pixel_x", "pixel_y"],
-  rgb: ["width", "height", "pixel_x", "pixel_y"],
-  spectrum: ["bias_min", "bias_max", "n_points"],
+  image: [["width", true], ["height", true], ["pixel_x", true], ["pixel_y", true], ["sample_mean", false], ["sample_std", true]],
+  rgb: [["width", true], ["height", true], ["pixel_x", true], ["pixel_y", true], ["sample_mean", false], ["sample_std", true]],
+  spectrum: [["bias_min", false], ["bias_max", false], ["n_points", false], ["sample_mean", false], ["sample_std", true]],
 };
 let datasetConfig = structuredClone(DEFAULT_DATASET);
 
@@ -40,19 +42,21 @@ function arraySnapshot(cur, view, s) {
   const index = view.kind === "cube" ? view.index : null;
   return {
     name: cur.name, key: cur.key, type: cur.type,
+    kind: view.kind === "cube" ? "image" : view.kind,
     array: arrayNameFor(cur.name, view.kind, view.channel, view.direction, s.flatten, index),
+    save: true,   // false: only the sample's mean / std are wanted (for the log), no file
     settings: { channel: view.channel, direction: view.direction, flatten: s.flatten, index },
   };
 }
 
 async function exportArray(snap) {
-  const ask = () => call("export", { key: snap.key, settings: snap.settings }, 0);
+  const ask = () => call("export", { key: snap.key, settings: snap.settings, withArray: snap.save !== false }, 0);
   let res = await ask();
   if (res.notLoaded) {   // Python dropped the file from its cache: parse it again
     await reloadInPython(snap);
     res = await ask();
   }
-  if (!res.npy) throw new Error("no array returned");
+  if (!res.npy && snap.save !== false) throw new Error("no array returned");
   return res;
 }
 
@@ -86,8 +90,10 @@ async function writeFile(dir, name, data) {
   await w.close();
 }
 
+// returns the description of the sample (with sample_mean / sample_std); writes the files unless snap.save is false
 async function saveArray(snap) {
   const res = await exportArray(snap);
+  if (snap.save === false) return res.meta;
   const dir = await arrayDir(true);
   await writeFile(dir, snap.array, res.npy);
   const meta = { file: snap.name, array: snap.array, ...res.meta, saved: localTimestamp() };
@@ -141,7 +147,7 @@ function validateDataset(c) {
     if (b !== undefined && !["union", "overlap", "strict"].includes(b) && !pair)
       return 'spectrum.bias_range must be "union", "overlap", "strict" or [min, max].';
   }
-  if (c.normalize !== undefined && !["none", "minmax", "zscore"].includes(c.normalize)) return 'normalize must be "none", "minmax" or "zscore".';
+  if (c.normalize !== undefined && !["none", "zscore"].includes(c.normalize)) return 'normalize must be "zscore" or "none".';
   return null;
 }
 
@@ -195,7 +201,7 @@ async function buildDataset() {
     const outDir = await trainDir(true);
     const arrays = await arrayDir(true);
     const order = new Map(state.files.map((f, i) => [f, i]));
-    let built = 0;
+    let built = 0, logChanged = false;
     for (const mode of MODES) {
       const items = [];
       for (const row of rows) {
@@ -206,6 +212,7 @@ async function buildDataset() {
           items.push({ row, meta });
         } catch { dsLog(`${mode}: the array of ${row.file} is missing, left out`); }
       }
+      if (await fillStats(items, arrays)) logChanged = true;
       items.sort((a, b) => (order.get(a.row.file) ?? 1e9) - (order.get(b.row.file) ?? 1e9));
       for (const kind of ["image", "rgb", "spectrum"]) {
         const group = items.filter((it) => it.meta.kind === kind);
@@ -220,6 +227,7 @@ async function buildDataset() {
         }
       }
     }
+    if (logChanged) { await writeLog(rows); setLabels(rows); }
     dsLog(built ? `Done ${localTimestamp()}. Files are in ${LOG_DIR}/${TRAIN_DIR}/.` : "Nothing to build yet: label some files first.");
   } catch (e) {
     dsLog("Build failed: " + e.message);
@@ -260,6 +268,46 @@ async function backfillArrays(rows) {
   return rows;
 }
 
+const numText = (v) => (Number.isFinite(v) ? String(v) : "");
+
+// samples saved before the statistics were recorded get them now; the log is given them as well
+async function fillStats(items, arrays) {
+  let changed = false;
+  for (const it of items) {
+    if (!Number.isFinite(it.meta.sample_std)) {
+      const bytes = await (await (await arrays.getFileHandle(it.row.array)).getFile()).arrayBuffer();
+      const st = await call("stats", { bytes, kind: it.meta.kind }, 0, [bytes]);
+      it.meta.sample_mean = st.sample_mean ?? null;
+      it.meta.sample_std = st.sample_std ?? null;
+      await writeFile(arrays, it.row.array.replace(/\.npy$/, ".json"), JSON.stringify(it.meta, null, 1) + "\n");
+    }
+    const mean = numText(it.meta.sample_mean), std = numText(it.meta.sample_std);
+    if (it.row.sample_mean !== mean || it.row.sample_std !== std) {
+      it.row.sample_mean = mean;
+      it.row.sample_std = std;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+// z-score over the whole dataset (non-NaN values only). A column without spread gives 0 everywhere.
+function datasetZscore(values, log) {
+  let floor = null, v = values;
+  if (log) {   // values <= 0 (e.g. the std of a constant image) are raised to the smallest positive one first
+    const positive = values.filter((x) => Number.isFinite(x) && x > 0);
+    floor = positive.length ? Math.min(...positive) : 1;
+    v = values.map((x) => (Number.isFinite(x) ? Math.log(Math.max(x, floor)) : NaN));
+  }
+  const fin = v.filter(Number.isFinite);
+  const mean = fin.length ? fin.reduce((a, b) => a + b, 0) / fin.length : 0;
+  const std = fin.length ? Math.sqrt(fin.reduce((a, b) => a + (b - mean) ** 2, 0) / fin.length) : 0;
+  const scale = fin.reduce((a, b) => Math.max(a, Math.abs(b)), 1e-300);
+  const constant = !(std > 1e-9 * scale);
+  return { z: v.map((x) => (Number.isFinite(x) ? (constant ? 0 : (x - mean) / std) : NaN)),
+           stats: { ...(log ? { log: true, floor } : { log: false }), mean, std: constant ? 0 : std, constant } };
+}
+
 async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
   const n = items.length;
   let params, sample;
@@ -290,8 +338,10 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
     params = { size, method: cfg.image.method };
     sample = kind === "rgb" ? [...size, 3] : [...size];
   }
-  params.normalize = cfg.normalize;
+  const zs = cfg.normalize === "zscore";
   const prefix = `${mode}_${kind}`;
+  const norm = { normalize: cfg.normalize, built: localTimestamp(), samples: n,
+                 note: "All statistics use non-NaN values only. NaN stays NaN in the arrays." };
 
   // inputs: streamed sample by sample, so the memory use stays small however many files there are
   const w = await (await outDir.getFileHandle(`${prefix}_input.npy`, { create: true })).createWritable();
@@ -299,7 +349,8 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
     await w.write(npyHeader("<f4", [n, ...sample]));
     for (let i = 0; i < n; i++) {
       const bytes = await (await (await arrays.getFileHandle(items[i].row.array)).getFile()).arrayBuffer();
-      const res = await call("transform", { bytes, kind, params }, 0, [bytes]);
+      const own = { ...params, normalize: cfg.normalize, mean: items[i].meta.sample_mean ?? null, std: items[i].meta.sample_std ?? null };
+      const res = await call("transform", { bytes, kind, params: own }, 0, [bytes]);
       if (res.shape.join() !== sample.join()) throw new Error(`${items[i].row.file} gave shape (${res.shape.join(", ")}), expected (${sample.join(", ")}).`);
       await w.write(res.data);
       if (i % 10 === 9) dsLog(`${mode} · ${kind}: ${i + 1} / ${n}`, true);
@@ -313,12 +364,24 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
   // outputs
   const info = { mode, kind, samples: n, built: localTimestamp(), order: "files oldest first (as listed in the app)",
                  input: { file: `${prefix}_input.npy`, dtype: "float32", shape: [n, ...sample], nan: "kept where there is no data" },
-                 transform: params };
+                 transform: params, normalize: cfg.normalize };
+  norm.input = zs
+    ? { scope: "per sample", formula: "(x - sample_mean) / sample_std",
+        statistics: "each sample's own mean and std, from its saved full-resolution array" +
+          (kind === "spectrum" ? " (signal rows only; the bias row is not normalized)" : "") +
+          "; listed per sample in " + `${prefix}_meta.csv`, constant_sample: "std 0 gives 0 everywhere" }
+    : { scope: "none", formula: "values as saved (the units of the file)" };
   let out;
   if (mode === "score") {
-    out = { descr: "<f8", data: Float64Array.from(items, (it) => Number(it.row.score)) };
-    info.output = { file: `${prefix}_output.npy`, dtype: "float64", meaning: "score" };
+    const raw = items.map((it) => Number(it.row.score));
+    const d = datasetZscore(raw, false);
+    out = { descr: "<f8", data: Float64Array.from(zs ? d.z : raw) };
+    info.output = { file: `${prefix}_output.npy`, dtype: "float64", meaning: zs ? "score, z-scored over the dataset" : "score" };
+    norm.output = zs ? { scope: "dataset", formula: "(score - mean) / std", mean: d.stats.mean, std: d.stats.std, constant: d.stats.constant,
+                         back: "score = z * std + mean" }
+                     : { scope: "none", mean: d.stats.mean, std: d.stats.std };
   } else {
+    norm.output = { scope: "none", formula: "class numbers are never normalized" };
     const ids = items.map((it) => it.row.class_id);
     const numeric = ids.every((v) => v !== "" && Number.isFinite(Number(v)));
     if (numeric && ids.every((v) => Number.isInteger(Number(v)))) {
@@ -337,23 +400,35 @@ async function buildGroup(mode, kind, items, cfg, outDir, arrays) {
   }
   await writeFile(outDir, `${prefix}_output.npy`, npyFile(out.descr, [n], out.data));
 
-  // aux: scan size / bias range of every sample, as measured (before any resizing)
-  const cols = AUX_COLUMNS[kind];
+  // aux: scan size / bias range and the sample's own mean / std, as measured (before any resizing).
+  // With "zscore" each column is z-scored over the dataset (after a log where marked); the raw values are in meta.csv.
+  const cols = AUX_COLUMNS[kind].map(([name]) => name);
   const aux = new Float64Array(n * cols.length);
-  items.forEach((it, i) => cols.forEach((c, j) => { const v = it.meta[c]; aux[i * cols.length + j] = Number.isFinite(v) ? v : NaN; }));
+  norm.aux = { scope: zs ? "dataset" : "none",
+               formula: zs ? "z = (v - mean) / std, with v = ln(max(x, floor)) for log columns, else v = x; constant columns are 0"
+                           : "raw values (the statistics below are what a z-score would use)",
+               columns: {} };
+  AUX_COLUMNS[kind].forEach(([name, log], j) => {
+    const raw = items.map((it) => (Number.isFinite(it.meta[name]) ? it.meta[name] : NaN));
+    const d = datasetZscore(raw, log);
+    (zs ? d.z : raw).forEach((v, i) => { aux[i * cols.length + j] = v; });
+    norm.aux.columns[name] = d.stats;
+  });
   await writeFile(outDir, `${prefix}_aux.npy`, npyFile("<f8", [n, cols.length], aux));
-  info.aux = { file: `${prefix}_aux.npy`, dtype: "float64", columns: cols,
+  await writeFile(outDir, `${prefix}_normalize.json`, JSON.stringify(norm, null, 2) + "\n");
+  info.aux = { file: `${prefix}_aux.npy`, dtype: "float64", columns: cols, values: zs ? "z-scores (see normalize.json)" : "raw",
                units: kind === "spectrum" ? items[0].meta.bias_units : items[0].meta.extent_units };
   if (kind === "spectrum") info.input.rows = "row 0 = bias, then the signal (forward, backward if recorded)";
 
   // meta: one line per sample, same order as the arrays
   const head = ["index", "file", "channel", "direction", "flatten", "array", "label", "class_id", "score", "original_shape",
                 "units", "extent_units", "width", "height", "pixel_x", "pixel_y", "slice_index", "slice_value",
-                "bias_min", "bias_max", "n_points", "labeled"];
+                "bias_min", "bias_max", "n_points", "sample_mean", "sample_std", "labeled"];
   const lines = items.map((it, i) => [i, it.row.file, it.meta.channel, it.meta.direction ?? "", it.meta.flatten ?? "", it.row.array,
     it.row.label, it.row.class_id, it.row.score, (it.meta.shape || []).join("x"), it.meta.units ?? "", it.meta.extent_units ?? it.meta.bias_units ?? "",
     it.meta.width ?? "", it.meta.height ?? "", it.meta.pixel_x ?? "", it.meta.pixel_y ?? "", it.meta.slice_index ?? "", it.meta.slice_value ?? "",
-    it.meta.bias_min ?? "", it.meta.bias_max ?? "", it.meta.n_points ?? "", it.row.timestamp]);
+    it.meta.bias_min ?? "", it.meta.bias_max ?? "", it.meta.n_points ?? "", numText(it.meta.sample_mean), numText(it.meta.sample_std),
+    it.row.timestamp]);
   await writeFile(outDir, `${prefix}_meta.csv`, [head, ...lines].map(csvLine).join(""));
   await writeFile(outDir, `${prefix}_info.json`, JSON.stringify(info, null, 2) + "\n");
   return [n, ...sample];

@@ -1,5 +1,5 @@
 // Runs Pyodide + py/reader.py off the main thread.
-// Messages in:  {id, op: "show" | "render" | "meta" | "export" | "transform" | "cancel", prio, gen, ...args}
+// Messages in:  {id, op: "show" | "render" | "meta" | "export" | "transform" | "stats" | "cancel", prio, gen, ...args}
 // Messages out: {id, ok, result | error} and {status: "..."} while starting up.
 const PYODIDE_URL = "https://cdn.jsdelivr.net/pyodide/v0.28.3/full/";
 const PYODIDE_PACKAGES = ["numpy", "pillow", "pyyaml", "packaging", "toolz", "cloudpickle"];
@@ -75,6 +75,9 @@ function run(job) {
   if (job.op === "transform") {   // build step: one saved sample -> its block of the stacked input array
     return toJs(dataset.transform(new Uint8Array(job.bytes), job.kind, JSON.stringify(job.params)));
   }
+  if (job.op === "stats") {       // mean / std of an array saved before these were recorded
+    return toJs(dataset.stats(new Uint8Array(job.bytes), job.kind));
+  }
   if (job.op === "show") {
     // bytes are only written to the in-memory FS when the file is not parsed yet
     if (!reader.is_loaded(job.key)) {
@@ -93,7 +96,9 @@ function run(job) {
   const kwargs = { direction: s.direction || "forward", flatten: s.flatten || "none" };
   if (s.channel != null) kwargs.channel = s.channel;
   if (s.index != null) kwargs.index = s.index;
-  if (job.op === "export") return toJs(reader.export.callKwargs(job.key, kwargs));   // the training array
+  if (job.op === "export") {   // the training array (or only its statistics) of what is on screen
+    return toJs(reader.export.callKwargs(job.key, { ...kwargs, with_array: job.withArray !== false }));
+  }
   const summary = toJs(reader.load("", job.key));
   const view = toJs(reader.render.callKwargs(job.key, kwargs));
   return { summary, view };

@@ -6,7 +6,7 @@ when the dataset is built, so that samples of different sizes can be stacked:
 * images:  ``interpolate`` (NaN-aware bilinear, block-averaged first when shrinking a lot)
            or ``pad_crop`` (centred, padded with NaN)
 * spectra: resampled onto one bias axis; points a file did not measure are NaN
-* ``normalize``: ``none`` | ``minmax`` | ``zscore``, per sample, ignoring NaN
+* ``normalize``: ``zscore`` uses each sample's own mean / std (non-NaN values only), ``none`` leaves the values
 
 Arrays keep NaN wherever the data has none (partial scans, bias outside the sweep).
 """
@@ -122,24 +122,37 @@ def pad_rows(a, n_rows):
 
 # ----------------------------------------------------------------------------- normalize
 
-def normalize(a, mode):
-    """Per-sample scaling of the values (not of a spectrum's bias row, which the caller excludes)."""
-    if mode in (None, "none"):
-        return a
+def sample_stats(arr, kind):
+    """(mean, std) of one saved sample, over its non-NaN values only.
+
+    Spectra: the signal rows (forward / backward together); the bias row is not part of it.
+    Returns (None, None) when the sample has no finite value.
+    """
+    a = np.asarray(arr, dtype=np.float64)
+    if kind == "spectrum":
+        a = a[1:]
+    v = a[np.isfinite(a)]
+    if not v.size:
+        return None, None
+    return float(v.mean()), float(v.std())
+
+
+def zscore(a, mean, std):
+    """(a - mean) / std with the sample's own recorded statistics; NaN stays NaN.
+
+    A sample without spread (std 0, e.g. a constant channel) becomes all zeros.
+    """
     a = np.asarray(a, dtype=np.float64)
-    finite = np.isfinite(a)
-    if not finite.any():
+    if mean is None or std is None:
         return a.astype(np.float32)
-    v = a[finite]
-    if mode == "minmax":
-        span = v.max() - v.min()
-        a = (a - v.min()) / (span if span > 0 else 1.0)
-    elif mode == "zscore":
-        std = v.std()
-        a = (a - v.mean()) / (std if std > 0 else 1.0)
-    else:
-        raise ValueError("unknown normalize mode %r" % (mode,))
-    return a.astype(np.float32)
+    out = (a - mean) / std if std > 0 else np.where(np.isfinite(a), 0.0, np.nan)
+    return out.astype(np.float32)
+
+
+def stats(data, kind):
+    """Statistics of a saved .npy sample (for arrays saved before they were recorded)."""
+    mean, std = sample_stats(from_npy(data), kind)
+    return {"sample_mean": mean, "sample_std": std}
 
 
 # ----------------------------------------------------------------------------- build step
@@ -149,25 +162,28 @@ def transform(data, kind, params):
 
     ``data``: the bytes of the sample's .npy file. ``kind``: "image" | "rgb" | "spectrum".
     ``params`` (dict or JSON text):
-      images:  {"size": [H, W], "method": "interpolate" | "pad_crop", "normalize": ...}
-      spectra: {"grid": {"min", "max", "points"} | null, "rows": n, "normalize": ...}
+      images:  {"size": [H, W], "method": "interpolate" | "pad_crop"}
+      spectra: {"grid": {"min", "max", "points"} | null, "rows": n}
+      both:    {"normalize": "zscore" | "none", "mean": ..., "std": ...}   (the sample's own statistics)
     Returns {"data": raw little-endian float32 bytes, "shape": [...]}.
     """
     if isinstance(params, str):
         params = json.loads(params)
     a = from_npy(data)
-    norm = params.get("normalize", "none")
+    norm = params.get("normalize", "none") == "zscore"
+    mean, std = params.get("mean"), params.get("std")
     if kind == "spectrum":
         rows, grid = int(params["rows"]), params.get("grid")
         if grid:
             out = resample_spectrum(a, np.linspace(grid["min"], grid["max"], int(grid["points"])), rows)
         else:
             out = pad_rows(a, rows)
-        if norm not in (None, "none"):
-            out[1:] = normalize(out[1:], norm)
+        if norm:
+            out[1:] = zscore(out[1:], mean, std)      # never the bias row
     else:
         size = params["size"]
         out = resize_pad_crop(a, size) if params.get("method") == "pad_crop" else resize_interpolate(a, size)
-        out = normalize(out, norm)
+        if norm:
+            out = zscore(out, mean, std)
     out = np.ascontiguousarray(out, dtype="<f4")
     return {"data": out.tobytes(), "shape": list(out.shape)}
