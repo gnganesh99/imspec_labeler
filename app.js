@@ -11,6 +11,8 @@ const LOG_FILE = "classification_log.csv";
 const LOG_COLUMNS = ["file", "type", "channel", "flatten", "mode", "label", "class_id", "score", "tags", "note", "array",
                      "sample_mean", "sample_std", "timestamp"];
 const DEFER_LABEL = "Deferred";   // always available on key D; copies go to labeled/deferred/
+const UNSURE_LABEL = "Unsure";    // always available on key U; copies go to labeled/unsure/
+const noOutput = (label) => label === DEFER_LABEL || label === UNSURE_LABEL;   // logged, but no class / score for training
 const COPY_MODES = ["none", "original", "image"];
 const SUPPORTED = /\.(sxm|dat|3ds|jpe?g|png|bmp|gif|webp|tiff?)$/i;
 const PREFETCH = 3;
@@ -22,7 +24,7 @@ const DEFAULT_SETTINGS = {
   dat: {}, img: { flatten: "none", cmap: "gray" },
 };
 
-const APP_VERSION = "2026-10-15 · Open folder in the header, Bad left / Good right";   // shown in the header: tells which build runs
+const APP_VERSION = "2026-10-15 · Open folder in the header, Bad left / Good right, note box in the panel, Unsure (U)";   // shown in the header: tells which build runs
 const $ = (id) => document.getElementById(id);
 const state = {
   dir: null, config: mergeConfig({}), userConfig: {}, mode: "binary", scoreBuf: "",
@@ -98,9 +100,7 @@ async function openFolder(handle) {
   }
   await ioChain;   // entries made in the previous folder are written there before switching
   state.folderId = (state.folderId || 0) + 1;
-  state.note = "";
-  $("noteChip").classList.add("hidden");
-  $("noteBox").classList.add("hidden");
+  $("note").value = "";   // a note typed for the previous folder
   state.dir = handle;
   rememberHandle(handle);
   $("folder").textContent = handle.name;
@@ -450,16 +450,16 @@ function updateProgress() {
 function setupFileList() {
   const filter = $("fileFilter");
   const options = state.mode === "score"
-    ? [["__all", "All files"], ["__unlabeled", "Unscored"], ["__scored", "Scored"], [DEFER_LABEL, DEFER_LABEL]]
+    ? [["__all", "All files"], ["__unlabeled", "Unscored"], ["__scored", "Scored"], [DEFER_LABEL, DEFER_LABEL], [UNSURE_LABEL, UNSURE_LABEL]]
     : [["__all", "All files"], ["__unlabeled", "Unlabeled"],
-       ...[...(state.mode === "binary" ? binaryClasses() : multiclassList(state.config).map((c) => c.name)), DEFER_LABEL].map((c) => [c, c])];
+       ...[...new Set([...(state.mode === "binary" ? binaryClasses() : multiclassList(state.config).map((c) => c.name)), DEFER_LABEL, UNSURE_LABEL])].map((c) => [c, c])];
   filter.replaceChildren(...options.map(([v, t]) => new Option(t, v)));
   $("fileSearch").value = "";
   renderFileList();
 }
 
 function labelClass(label) {
-  if (label === DEFER_LABEL) return "defer";
+  if (noOutput(label)) return "defer";
   if (state.mode !== "binary") return "";
   const classes = binaryClasses();
   if (classes.length >= 2 && label === classes[0]) return "good";
@@ -477,7 +477,7 @@ function renderFileList() {
   let shown = 0, curRow = null;
   state.files.forEach((name, i) => {
     const r = rowOf(name), text = chipText(r);
-    const scored = r && r.label !== DEFER_LABEL && r.score !== "";
+    const scored = r && !noOutput(r.label) && r.score !== "";
     if (f === "__unlabeled" ? r : f === "__scored" ? !scored : f !== "__all" && !(r && r.label === f)) return;
     if (q && !name.toLowerCase().includes(q) && !text.toLowerCase().includes(q)) return;
     const row = document.createElement("div");
@@ -520,17 +520,16 @@ function record(fields) {
   const flatten = view && (view.kind === "image" || view.kind === "cube") ? state.settings[cur.type].flatten : "";
   const row = {
     file: cur.name, type: cur.type, channel, flatten, mode, label: "", class_id: "", score: "", tags: "",
-    note: state.note, array: "", sample_mean: "", sample_std: "", timestamp: localTimestamp(), ...fields,
+    note: $("note").value.trim(), array: "", sample_mean: "", sample_std: "", timestamp: localTimestamp(), ...fields,
   };
   // what is on screen now (dataset.js): its mean / std always go into the log; the training array is saved when
-  // that is switched on, except for deferred files, which have no output
+  // that is switched on, except for deferred / unsure files, which have no output
   const snap = view ? arraySnapshot(cur, view, state.settings[cur.type]) : null;
   if (snap) {
-    snap.save = arraysOn() && row.label !== DEFER_LABEL;
+    snap.save = arraysOn() && !noOutput(row.label);
     if (snap.save) row.array = snap.array;
   }
-  state.note = "";
-  $("noteChip").classList.add("hidden");
+  $("note").value = "";   // the note went with this entry
   const previous = rowOf(cur.name);   // set when reviewing an already labeled file
   state.rows.set(rowKey(mode, cur.name), row);
   state.done.add(cur.name);
@@ -605,7 +604,7 @@ function localTimestamp(d = new Date()) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
 }
 
-function folderName(label) { return label === DEFER_LABEL ? "deferred" : safeName(label); }
+function folderName(label) { return label === DEFER_LABEL ? "deferred" : label === UNSURE_LABEL ? "unsure" : safeName(label); }
 function safeName(s) { return String(s).replace(/[<>:"/\\|?*\x00-\x1f]/g, "_").trim() || "_"; }
 
 async function logHandle(create) {
@@ -747,9 +746,8 @@ function cycle(list, value, step = 1) { return list[(list.indexOf(value) + step 
 
 function onKey(e) {
   const tag = e.target.tagName;
-  if (e.target.id === "note") {
-    if (e.key === "Enter") { keepNote(); e.preventDefault(); }
-    if (e.key === "Escape") { $("noteBox").classList.add("hidden"); e.target.blur(); }
+  if (e.target.id === "note") {   // Enter / Esc leave the box; the note stays there until the next label
+    if (e.key === "Enter" || e.key === "Escape") { e.preventDefault(); e.target.blur(); }
     return;
   }
   // while typing in a text field (including the settings editor) the keys belong to the field, not to the shortcuts
@@ -770,32 +768,19 @@ function onKey(e) {
   else if (e.key === "End") goTo(state.files.length - 1);
   else if (e.key.toLowerCase() === "z") undo();
   else if (e.key.toLowerCase() === "d") label(DEFER_LABEL);
+  else if (e.key.toLowerCase() === "u") label(UNSURE_LABEL);
   else if (!s) handled = false;
   else if (e.key.toLowerCase() === "b" && view) changeSetting({ direction: view.direction === "forward" ? "backward" : "forward" });
   else if (e.key.toLowerCase() === "f") changeSetting({ flatten: cycle(FLATTENS, s.flatten, e.shiftKey ? -1 : 1) });
   else if (e.key.toLowerCase() === "c") changeSetting({ cmap: cycle(Object.keys(COLORMAPS), s.cmap, e.shiftKey ? -1 : 1) });
   else if ((e.key === "PageUp" || e.key === "PageDown") && view && view.kind === "cube")
     changeSetting({ index: Math.min(view.n - 1, Math.max(0, (s.index ?? view.index) + (e.key === "PageDown" ? 1 : -1))) });
-  else if (e.key.toLowerCase() === "n" && state.config.notes) openNote();
+  else if (e.key.toLowerCase() === "n" && state.config.notes) $("note").focus();
   else handled = false;
   if (handled) {
     e.preventDefault();
     if (tag === "SELECT" || tag === "BUTTON" || tag === "INPUT") e.target.blur();
   }
-}
-
-function openNote() {
-  $("noteBox").classList.remove("hidden");
-  $("note").value = state.note;
-  $("note").focus();
-}
-
-function keepNote() {
-  state.note = $("note").value.trim();
-  $("noteBox").classList.add("hidden");
-  $("note").blur();
-  $("noteChip").textContent = "Note: " + state.note;
-  $("noteChip").classList.toggle("hidden", !state.note);
 }
 
 let toastTimer;

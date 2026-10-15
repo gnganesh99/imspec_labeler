@@ -134,13 +134,15 @@ function buildLabelButtons() {
       wrap.append(hint);
     }
   }
+  add("Unsure", ["U"], "", () => label(UNSURE_LABEL));
   add("Defer", ["D"], "", () => label(DEFER_LABEL));
 
-  const keys = [["↑ ↓", "channel"], ["B", "forward / backward"], ["D", "defer (labeled/deferred/)"], ["F", "flatten"], ["C", "colormap"],
+  const keys = [["↑ ↓", "channel"], ["B", "forward / backward"], ["D", "defer (labeled/deferred/)"], ["U", "unsure (labeled/unsure/)"], ["F", "flatten"], ["C", "colormap"],
                 ["PgUp PgDn", "slice (3ds, stacks)"], ["Space", "skip"], ["[ ]", "previous / next file"],
                 ["Home End", "first / last file"], ["⇧ Space", "first unlabeled"], ["Z", "undo last entry"]];
   if (mode === "score") keys.unshift(["0-9 . -", "type a score"], ["Enter", "save the score"], ["Backspace", "edit"], ["Esc", "clear what you typed"]);
-  if (state.config.notes) keys.push(["N", "note for this file"]);
+  if (state.config.notes) keys.push(["N", "write a note (saved with the next label)"]);
+  $("noteBox").classList.toggle("hidden", !state.config.notes);
   $("keys").replaceChildren(...keys.flatMap(([k, d]) => {
     const a = document.createElement("span"); a.innerHTML = k.split(" ").map((x) => `<kbd>${x}</kbd>`).join(" ");
     const b = document.createElement("span"); b.textContent = d;
@@ -186,7 +188,7 @@ function updateScoreBox() {
   const { min, max } = state.config.score;
   const r = state.current && rowOf(state.current.name);
   const parts = [];
-  if (r && r.label === DEFER_LABEL) parts.push("Deferred.");
+  if (r && noOutput(r.label)) parts.push(`${r.label}.`);
   else if (r) parts.push(`Scored ${r.score}.`);
   parts.push(Number.isFinite(min) || Number.isFinite(max)
     ? `Range ${Number.isFinite(min) ? min : "−∞"} to ${Number.isFinite(max) ? max : "∞"}.` : "Any number, negatives and decimals allowed.");

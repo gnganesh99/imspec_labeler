@@ -216,7 +216,7 @@ async function buildDataset() {
     for (const mode of MODES) {
       const items = [];
       for (const row of rows) {
-        if (row.mode !== mode || row.label === DEFER_LABEL || !row.array) continue;
+        if (row.mode !== mode || noOutput(row.label) || !row.array) continue;
         try {
           const meta = JSON.parse(await (await (await arrays.getFileHandle(row.array.replace(/\.npy$/, ".json"))).getFile()).text());
           await arrays.getFileHandle(row.array);
@@ -249,7 +249,7 @@ async function buildDataset() {
 
 // rows labeled before arrays were saved (or with saving off): make their arrays now from the original files
 async function backfillArrays(rows) {
-  const todo = rows.filter((r) => !r.array && r.label !== DEFER_LABEL && state.files.includes(r.file));
+  const todo = rows.filter((r) => !r.array && !noOutput(r.label) && state.files.includes(r.file));
   if (!todo.length) return rows;
   let done = 0, failed = 0;
   dsLog(`Making arrays for ${todo.length} earlier label(s)…`);

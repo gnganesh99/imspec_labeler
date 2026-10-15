@@ -56,7 +56,7 @@ describes it (channel, flatten, shape, scan size, bias range, mean, std).
 | Spectrum (`.dat`) | `float32 (rows, N)` | Row 0 is the **bias**, row 1 the labeled channel, row 2 its backward sweep if the file has one. |
 | Colour photo | `uint8 (H, W, 3)` | |
 
-- **Deferred files** get no array, because they have no output.
+- **Deferred and Unsure files** get no array, because they have no output.
 - **Undo and overwrite** remove or replace the array together with the log entry.
 - **The log** records the array in its `array` column, and the mean and standard deviation of what was labeled
   in `sample_mean` and `sample_std`. Those two are written for every entry, also with saving switched off.
@@ -91,7 +91,7 @@ Shapes of `_input.npy`, without the NaN mask:
 If the class ids of a set are not all numbers (text ids, or older log rows without one), the output holds an
 index into the label names instead; `_info.json` lists which number stands for which label.
 
-Deferred files are left out. Labels made before this feature existed, or with saving switched off, are filled in
+Deferred and Unsure files are left out. Labels made before this feature existed, or with saving switched off, are filled in
 from the original files when you build.
 
 ### Aux columns

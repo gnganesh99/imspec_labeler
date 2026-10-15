@@ -39,6 +39,7 @@ Scores are never copied (the *Copy* option is hidden). `labeler.json` also keeps
 | `1`–`9`, `0` | **Multiclass mode**: the class with that key (see the modes above) |
 | `0`–`9` `.` `-`, `Enter` | **Score mode**: just start typing a number (negatives and decimals are fine), `Enter` saves, `Backspace` edits, `Esc` clears |
 | `D` | defer, in every mode: logged as `Deferred`, copied to `labeled/deferred/` (not in Score mode) |
+| `U` | unsure, in every mode: logged as `Unsure`, copied to `labeled/unsure/` (not in Score mode); left out of the training data like `Deferred` |
 | `Space` | skip (stays unlabeled) |
 | `[` / `]` | previous / next file, labeled or not (also the ‹ › buttons beside the image); a labeled file shows its label, and pressing a label key **overwrites** it |
 | `Home` / `End` | first / last file |
@@ -48,10 +49,10 @@ Scores are never copied (the *Copy* option is hidden). `labeler.json` also keeps
 | `B` | backward / forward scan |
 | `F` / `C` | flatten / colormap (`Shift` = backwards) |
 | `PageUp` / `PageDown` | previous / next slice of `.3ds` grids and tif stacks |
-| `N` | note, attached to the next label |
+| `N` | jump to the note box (always shown in the side panel; the note is saved with the next label, by key or click) |
 
 Files are ordered **oldest first by modified time** (all types mixed; ties by name). The sidebar's **Files** list shows
-every file with its label chip; search by name or label, filter (All / Unlabeled / each class / Deferred), and click a
+every file with its label chip; search by name or label, filter (All / Unlabeled / each class / Deferred / Unsure), and click a
 row (or press Enter in the search box) to jump there. Jumping does not label anything in between.
 
 **View**, **Tools** and **Data** (buttons in the header) open panels to the left of the sidebar:
