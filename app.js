@@ -22,7 +22,7 @@ const DEFAULT_SETTINGS = {
   dat: {}, img: { flatten: "none", cmap: "gray" },
 };
 
-const APP_VERSION = "2026-10-12d · Data menu";   // shown in the header: tells which build runs
+const APP_VERSION = "2026-10-15 · Open folder in the header, Bad left / Good right";   // shown in the header: tells which build runs
 const $ = (id) => document.getElementById(id);
 const state = {
   dir: null, config: mergeConfig({}), userConfig: {}, mode: "binary", scoreBuf: "",
@@ -83,7 +83,12 @@ function saveSettings() {
 function settingsKey(s) { return [s.channel, s.direction, s.flatten, s.index].join("|"); }
 
 // --------------------------------------------------------------------------- folder
+// a file's identity for the caches (Python's parsed files, the view cache): the folder counter keeps two
+// folders that hold files of the same name, size and date apart
+function fileKey(name, file) { return `${state.folderId}|${name}|${file.size}|${file.lastModified}`; }
+
 async function openFolder(handle) {
+  if (datasetBuilding) return toast("Wait until Build dataset has finished, then open the other folder.");
   try {
     if (!handle) handle = await window.showDirectoryPicker({ id: "spm-labeler", mode: "readwrite" });
     else if ((await handle.requestPermission({ mode: "readwrite" })) !== "granted") return;
@@ -91,6 +96,11 @@ async function openFolder(handle) {
     if (e.name !== "AbortError") toast(e.message);
     return;
   }
+  await ioChain;   // entries made in the previous folder are written there before switching
+  state.folderId = (state.folderId || 0) + 1;
+  state.note = "";
+  $("noteChip").classList.add("hidden");
+  $("noteBox").classList.add("hidden");
   state.dir = handle;
   rememberHandle(handle);
   $("folder").textContent = handle.name;
@@ -209,7 +219,7 @@ async function goTo(pos) {
 
 async function fetchView(name, settings, prio) {
   const file = await (await state.dir.getFileHandle(name)).getFile();
-  const key = `${name}|${file.size}|${file.lastModified}`;
+  const key = fileKey(name, file);
   const ck = key + "|" + settingsKey(settings);
   if (viewCache.has(ck)) return { key, ...viewCache.get(ck) };
   if (!state.workerReady) setStatus("Loading Python…");
@@ -833,6 +843,7 @@ async function lastHandle() {
   $("ver").textContent = "v" + APP_VERSION.split(" · ")[0];
   $("ver").title = APP_VERSION;
   $("openBtn").onclick = () => openFolder();
+  $("headerOpenBtn").onclick = (e) => { e.currentTarget.blur(); openFolder(); };   // switch folders without a reload
   const last = await lastHandle();
   if (last) {
     $("reopenBtn").textContent = "Reopen " + last.name;

@@ -116,7 +116,9 @@ function buildLabelButtons() {
     wrap.append(b);
   };
   if (mode === "binary") {
-    binaryList(state.config).forEach((c, i) => add(c.name, BINARY_KEYS[i], i === 0 ? "good" : "bad", () => pickBinary(i), `class_id ${c.id}`));
+    // drawn second class first: Bad on the left (key ←), Good on the right (key →)
+    binaryList(state.config).map((c, i) => [c, i]).reverse()
+      .forEach(([c, i]) => add(c.name, BINARY_KEYS[i], i === 0 ? "good" : "bad", () => pickBinary(i), `class_id ${c.id}`));
   } else if (mode === "multiclass") {
     const list = multiclassList(state.config);
     list.forEach((c) => add(c.name, [c.key], "", () => pickClass(c), `class_id ${c.id}`));

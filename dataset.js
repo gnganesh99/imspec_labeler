@@ -26,6 +26,7 @@ const AUX_COLUMNS = {
   spectrum: [["bias_min", false], ["bias_max", false], ["n_points", false], ["sample_mean", false], ["sample_std", true]],
 };
 let datasetConfig = structuredClone(DEFAULT_DATASET);
+let datasetBuilding = false;   // a build is running (opening another folder waits for it)
 
 function arraysOn() {
   try { return localStorage.getItem("spm-labeler-arrays") === "on"; } catch { return false; }   // off by default
@@ -200,6 +201,7 @@ async function buildDataset() {
   const cfg = checkDatasetText();
   if (!cfg) return;
   $("dsBuild").disabled = true;
+  datasetBuilding = true;
   $("dsStatus").textContent = "";
   try {
     datasetConfig = cfg;
@@ -242,6 +244,7 @@ async function buildDataset() {
     dsLog("Build failed: " + e.message);
   }
   $("dsBuild").disabled = false;
+  datasetBuilding = false;
 }
 
 // rows labeled before arrays were saved (or with saving off): make their arrays now from the original files
@@ -255,7 +258,7 @@ async function backfillArrays(rows) {
       const file = await (await state.dir.getFileHandle(r.file)).getFile();
       const m = /^(.*) (forward|backward)$/.exec(r.channel);
       const snap = {
-        name: r.file, key: `${r.file}|${file.size}|${file.lastModified}`, type: fileType(r.file), array: "",
+        name: r.file, key: fileKey(r.file, file), type: fileType(r.file), array: "",
         settings: { channel: m ? m[1] : r.channel, direction: m ? m[2] : "forward", flatten: r.flatten || "none", index: null },
       };
       await reloadInPython(snap);

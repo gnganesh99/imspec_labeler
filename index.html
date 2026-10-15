@@ -118,6 +118,7 @@
   .tool .actions button.on { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
   input[type=number] { font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--border);
                        border-radius: 6px; padding: 5px 8px; width: 90px; }
+  #headerOpenBtn { flex: none; width: 30px; height: 30px; padding: 0; display: inline-flex; align-items: center; justify-content: center; }
   #modeBox { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 12px; }
   #modeBox select { width: auto; font-size: 13px; font-weight: 600; }
   .clip { display: flex; align-items: center; gap: 8px; }
@@ -158,6 +159,9 @@
 <body>
 <header>
   <h1>ImSpec Labeler</h1><span id="ver" class="sub" title="Version of the page you are running"></span>
+  <button id="headerOpenBtn" title="Open folder" aria-label="Open folder">
+    <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 6.5A1.5 1.5 0 0 1 4.5 5h4.6l2 2h8.4A1.5 1.5 0 0 1 21 8.5v9a1.5 1.5 0 0 1-1.5 1.5h-15A1.5 1.5 0 0 1 3 17.5z"
+      fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg></button>
   <label id="modeBox" class="hidden" title="Labeling mode">Mode
     <select id="modeSel">
       <option value="binary">Binary</option>

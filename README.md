@@ -14,6 +14,8 @@ A web app to label, classify and score images and spectra (Nanonis `.sxm` / `.da
 Supported: Nanonis `.sxm` (images), `.dat` (spectra), `.3ds` (grid spectroscopy, bias slice + mean spectrum),
 and `jpg / png / tif / bmp / gif / webp` images.
 
+To switch to another data folder, use **Open folder** in the header, top left; no reload is needed.
+
 ### Modes and settings
 
 Pick the mode in the header, top left (**Binary** by default, **Multiclass** or **Score**). The settings box under
